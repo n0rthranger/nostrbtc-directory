@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  strfry:
+    build:
+      context: ./strfry
+      dockerfile: Containerfile
+    container_name: directory-strfry
+    restart: unless-stopped
+    volumes:
+      - strfry-db:/app/strfry-db
+    networks:
+      - relay-net
+    expose:
+      - "7777"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Containerfile
+    container_name: directory-backend
+    restart: unless-stopped
+    # NOTE: Production uses start.sh with --secret flags (podman secrets).
+    # Do NOT put real secrets here — this file is for reference only.
+    environment:
+      - RELAY_DOMAIN=${RELAY_DOMAIN:-localhost}
+      - OPENNODE_SUCCESS_URL=https://${RELAY_DOMAIN:-localhost}/success.html
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}
+    networks:
+      - relay-net
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: directory-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - relay-net
+    depends_on:
+      - strfry
+      - backend
+
+volumes:
+  strfry-db:
+  caddy-data:
+  caddy-config:
+
+networks:
+  relay-net:
+    driver: bridge

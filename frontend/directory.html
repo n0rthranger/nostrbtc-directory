@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Directory - your-relay.example.com</title>
+    <meta name="description" content="Meet the relay community. Browse verified Nostr subscribers.">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="your-relay.example.com">
+    <meta property="og:title" content="Subscriber Directory - your-relay.example.com">
+    <meta property="og:description" content="Meet the relay community. Browse verified Nostr subscribers paying with Lightning.">
+    <meta property="og:url" content="https://your-relay.example.com/directory">
+    <meta name="twitter:card" content="summary">
+    <link rel="icon" type="image/png" href="img/logo-icon.png">
+    <link rel="stylesheet" href="css/style.css?v=200">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0a0a0f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="directory">
+    <link rel="apple-touch-icon" href="/img/logo-icon-192.png">
+</head>
+<body>
+    <div class="ambient-orb ambient-orb-1"></div>
+    <div class="ambient-orb ambient-orb-2"></div>
+    <nav>
+        <a href="/">Home</a>
+        <a href="/subscribe">Subscribe</a>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/directory" class="active">Directory</a>
+        <a href="/email">Email</a>
+        <a href="/guide">Guide</a>
+    </nav>
+
+    <div class="container">
+        <header>
+            <div class="constellation-wrap constellation-wrap-hero">
+                <canvas class="constellation-canvas"></canvas>
+                <h1 class="constellation-title constellation-title-hero">Directory</h1>
+            </div>
+            <div class="cmd-line">
+                <span class="cmd-prompt">&gt;</span>
+                <span class="cmd-typed" id="cmd-typed" data-typewriter="explore any nostr identity"></span><span class="cmd-cursor">_</span>
+            </div>
+        </header>
+
+        <!-- Explore Nostr — unified panel -->
+        <div class="wot-panel reveal">
+            <svg class="grape-vine-bg" viewBox="0 0 800 200" preserveAspectRatio="none" aria-hidden="true"><path class="vine-path vine-1" d="M-20 180 C60 160, 100 120, 180 130 S300 90, 400 100 S520 60, 600 80 S720 50, 820 70" fill="none"/><path class="vine-path vine-2" d="M820 20 C740 40, 700 80, 620 70 S500 110, 400 100 S280 140, 200 120 S80 150, -20 130" fill="none"/><circle class="vine-berry vb1" cx="180" cy="128" r="4"/><circle class="vine-berry vb2" cx="400" cy="98" r="5"/><circle class="vine-berry vb3" cx="600" cy="78" r="4"/><circle class="vine-berry vb4" cx="100" cy="145" r="3.5"/><circle class="vine-berry vb5" cx="300" cy="92" r="3.5"/><circle class="vine-berry vb6" cx="500" cy="85" r="4"/><circle class="vine-berry vb7" cx="700" cy="58" r="3.5"/><circle class="vine-berry vb8" cx="250" cy="108" r="3"/><circle class="vine-berry vb9" cx="550" cy="72" r="3"/><circle class="vine-berry vb10" cx="650" cy="72" r="3.5"/></svg>
+            <p class="wot-panel-desc">Scan any npub. See who they are through <em>your</em> Web of Trust &mdash; trust scores, shared connections, and social context powered by <a href="https://github.com/NosFabrica/brainstorm_graperank_algorithm" target="_blank" rel="noopener" class="wot-brand-link">GrapeRank</a> <span class="grape-cluster" aria-hidden="true"><svg class="grape-svg" viewBox="0 0 44 56" width="20" height="26"><defs><radialGradient id="gBerry" cx="38%" cy="32%" r="52%"><stop offset="0%" stop-color="#d8b4fe"/><stop offset="50%" stop-color="#a855f7"/><stop offset="100%" stop-color="#6d28d9"/></radialGradient><radialGradient id="gShine" cx="35%" cy="28%" r="30%"><stop offset="0%" stop-color="rgba(255,255,255,0.35)"/><stop offset="100%" stop-color="rgba(255,255,255,0)"/></radialGradient><filter id="gGlow"><feGaussianBlur stdDeviation="1" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><path class="grape-stem" d="M22 14 C22 8, 22 5, 24 3 C26 1, 30 0, 33 1" stroke-linecap="round"/><path class="grape-leaf" d="M31 2 C34 -1, 39 0, 38 4 C40 2, 42 4, 40 7 C42 7, 42 10, 39 10 C38 8, 34 6, 31 5Z"/><path class="grape-leaf grape-leaf-2" d="M24 4 C21 1, 16 1, 16 5 C14 3, 12 5, 14 7 C13 8, 14 10, 17 9 C18 7, 21 6, 24 6Z"/><g filter="url(#gGlow)"><circle class="grape-berry gb1" cx="16" cy="17" r="5"/><circle class="grape-berry gb2" cx="28" cy="17" r="5"/><circle class="grape-berry gb3" cx="22" cy="16" r="5"/><circle class="grape-berry gb4" cx="11" cy="25" r="5"/><circle class="grape-berry gb5" cx="22" cy="24" r="5"/><circle class="grape-berry gb6" cx="33" cy="25" r="5"/><circle class="grape-berry gb7" cx="15" cy="32" r="5"/><circle class="grape-berry gb8" cx="28" cy="32" r="5"/><circle class="grape-berry gb9" cx="18" cy="39" r="4.5"/><circle class="grape-berry gb10" cx="26" cy="39" r="4.5"/><circle class="grape-berry gb11" cx="22" cy="46" r="4"/></g><g opacity="0.5"><circle cx="16" cy="17" r="5" fill="url(#gShine)"/><circle cx="28" cy="17" r="5" fill="url(#gShine)"/><circle cx="22" cy="16" r="5" fill="url(#gShine)"/><circle cx="11" cy="25" r="5" fill="url(#gShine)"/><circle cx="22" cy="24" r="5" fill="url(#gShine)"/><circle cx="33" cy="25" r="5" fill="url(#gShine)"/><circle cx="15" cy="32" r="5" fill="url(#gShine)"/><circle cx="28" cy="32" r="5" fill="url(#gShine)"/><circle cx="18" cy="39" r="4.5" fill="url(#gShine)"/><circle cx="26" cy="39" r="4.5" fill="url(#gShine)"/><circle cx="22" cy="46" r="4" fill="url(#gShine)"/></g></svg></span></p>
+            <div class="wot-action-row">
+                <div class="lookup-bar">
+                    <input type="text" id="lookup-input" class="lookup-input" placeholder="npub, hex, or user@domain..." autocomplete="off" spellcheck="false">
+                    <button type="button" id="lookup-btn" class="lookup-btn">Scan</button>
+                </div>
+                <div id="wot-connect-area"></div>
+            </div>
+        </div>
+
+        <div id="lookup-result" style="display:none"></div>
+
+        <div class="glow-line"></div>
+
+        <div class="dir-cta reveal">
+            <a href="/subscribe?plan=directory" class="btn btn-primary dir-cta-btn">Get Listed &mdash; 1,100 sats</a>
+        </div>
+
+        <!-- Community Stats -->
+        <div id="dir-stats" class="directory-stats reveal">
+            <div class="dir-stat-box">
+                <div class="dir-stat-value" id="stat-members">--</div>
+                <div class="dir-stat-label">Members</div>
+            </div>
+            <div class="dir-stat-box">
+                <div class="dir-stat-value" id="stat-active">--</div>
+                <div class="dir-stat-label">Active This Week</div>
+            </div>
+            <div class="dir-stat-box">
+                <div class="dir-stat-value" id="stat-events">--</div>
+                <div class="dir-stat-label">Events Stored</div>
+            </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="dir-filter reveal" id="dir-filter">
+            <div class="dfilter-row">
+                <div class="dfilter-sort" id="dfilter-sort">
+                    <div class="dfilter-sort-slider"></div>
+                    <button type="button" class="dfilter-sort-btn active" data-sort="newest">Newest</button>
+                    <button type="button" class="dfilter-sort-btn" data-sort="active">Active</button>
+                    <button type="button" class="dfilter-sort-btn" data-sort="name">Name</button>
+                </div>
+                <div class="dfilter-search">
+                    <svg class="dfilter-search-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+                    <input type="text" id="dfilter-search" class="dfilter-search-input" placeholder="Search members..." autocomplete="off" spellcheck="false">
+                </div>
+                <div class="dfilter-tag-wrap" id="dfilter-tag-wrap" style="display:none">
+                    <button type="button" class="dfilter-tag-toggle" id="dfilter-tag-toggle">Tags <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg></button>
+                    <div class="dfilter-tag-dropdown" id="dfilter-tag-dropdown"></div>
+                </div>
+                <button type="button" class="dfilter-badge-btn" data-badge="relay-subscriber"><svg viewBox="0 0 24 24" width="12" height="12"><circle cx="12" cy="12" r="3" fill="#f7931a"/><circle cx="12" cy="12" r="6" fill="none" stroke="#f7931a" stroke-width="1.5" opacity="0.7"/></svg> Relay</button>
+                <button type="button" class="dfilter-badge-btn" data-badge="nip05-live"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#10b981" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> Verified</button>
+                <button type="button" class="dfilter-badge-btn" data-badge="lightning-reachable"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#eab308" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 14H12l-1 8L19.5 10H12l1-8z"/></svg> Lightning</button>
+                <button type="button" class="dfilter-view-btn" id="dfilter-view" title="Toggle view"><svg class="dfilter-view-list" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg><svg class="dfilter-view-grid" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button>
+            </div>
+            <div class="dfilter-active" id="dfilter-active" style="display:none"></div>
+        </div>
+        <div id="dir-count" class="directory-count"></div>
+
+        <!-- Trust Clusters -->
+        <div id="dir-clusters" class="dir-cluster-bar" style="display:none"></div>
+
+        <!-- Member Grid -->
+        <div id="dir-grid" class="directory-grid">
+            <div class="dir-card dir-skeleton"><div class="dir-card-banner"></div><div class="dir-card-body"><div class="dir-skeleton-avatar"></div><div class="dir-skeleton-line" style="width:60%"></div><div class="dir-skeleton-line" style="width:40%"></div><div class="dir-skeleton-line" style="width:80%"></div></div></div>
+            <div class="dir-card dir-skeleton"><div class="dir-card-banner"></div><div class="dir-card-body"><div class="dir-skeleton-avatar"></div><div class="dir-skeleton-line" style="width:50%"></div><div class="dir-skeleton-line" style="width:45%"></div><div class="dir-skeleton-line" style="width:70%"></div></div></div>
+            <div class="dir-card dir-skeleton"><div class="dir-card-banner"></div><div class="dir-card-body"><div class="dir-skeleton-avatar"></div><div class="dir-skeleton-line" style="width:55%"></div><div class="dir-skeleton-line" style="width:35%"></div><div class="dir-skeleton-line" style="width:75%"></div></div></div>
+        </div>
+
+        <div id="dir-sentinel" class="directory-sentinel"></div>
+
+        <div id="dir-empty" style="display:none;text-align:center;padding:3rem 1rem;">
+            <p style="font-family:'Orbitron',sans-serif;font-size:1.1rem;color:var(--text-muted);margin-bottom:0.5rem;">No members listed yet</p>
+            <p style="color:var(--text-muted);font-size:0.85rem;"><a href="/subscribe" style="color:var(--neon-purple);">Subscribe</a> and list yourself from your dashboard.</p>
+        </div>
+
+        <footer>
+            <div class="footer-bar">
+                <div class="footer-bar-item"><span class="dot-online"></span> <a href="https://github.com/hoytech/strfry">strfry</a></div>
+                <a href="#" class="footer-bar-item"><span class="signal-icon"><span></span><span></span><span></span><span></span></span> @your-npub</a>
+                <div class="footer-bar-item footer-donate" data-address="YOUR_BTC_ADDRESS"><span class="btc-sym">&#8383;</span> donate: <span class="btc-addr">YOUR_BTC_ADDRESS</span><span class="donate-copied">copied!</span></div>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+    window.__dirPrefetch = {
+        stats: fetch('/api/directory/stats').then(function(r){return r.json()}).catch(function(){return null}),
+        members: fetch('/api/directory?page=1&limit=50&sort=newest').then(function(r){return r.json()}).catch(function(){return null}),
+        tags: fetch('/api/directory/tags').then(function(r){return r.json()}).catch(function(){return null}),
+        clusters: fetch('/api/directory/clusters').then(function(r){return r.json()}).catch(function(){return null})
+    };
+    </script>
+    <script src="js/site-init.js?v=20" defer></script>
+    <script src="js/dir-terminal.js?v=11"></script>
+    <script src="js/directory.js?v=41"></script>
+    <script src="js/lookup.js?v=61" defer></script>
+</body>
+</html>

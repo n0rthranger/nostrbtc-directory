@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nostr Card</title>
+    <link rel="icon" type="image/png" href="/img/logo-icon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <!-- Critical CSS inlined so skeleton renders instantly -->
+    <style>
+        :root{--bg-deep:#0a0a0f;--bg:#0d0d14;--bg-card:#12121c;--bg-card-hover:#181825;--border:rgba(139,92,246,0.15);--border-glow:rgba(139,92,246,0.4);--text:#e0e0e8;--text-muted:#6a6a7a;--text-bright:#fff;--neon-purple:#8b5cf6;--neon-blue:#06b6d4;--neon-pink:#ec4899;--bitcoin:#f7931a;--bitcoin-glow:rgba(247,147,26,0.4);--green:#22c55e;--red:#ef4444;}
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg-deep);color:var(--text);line-height:1.6;min-height:100vh;overflow-x:hidden;}
+    </style>
+    <!-- Load fonts and full CSS non-blocking -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Share+Tech+Mono&family=Inter:wght@300;400;500;600&display=swap">
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="/js/card-init.js?v=1"></script>
+    <!-- Dynamic OG tags set by JS -->
+    <meta property="og:type" content="profile">
+    <meta property="og:site_name" content="__RELAY_DOMAIN__">
+    <meta name="twitter:card" content="summary">
+    <style>
+        .card-container {
+            max-width: 480px;
+            margin: 0 auto;
+            padding: 0 1rem;
+        }
+
+        /* Animated glow wrapper — enhanced */
+        .card-outer {
+            position: relative;
+            border-radius: 16px;
+            overflow: hidden;
+            animation: card-glow 4s ease-in-out infinite, card-entrance 0.6s ease-out;
+        }
+        @keyframes card-glow {
+            0%, 100% {
+                box-shadow: 0 0 30px rgba(139, 92, 246, 0.15), 0 0 60px rgba(139, 92, 246, 0.06);
+            }
+            50% {
+                box-shadow: 0 0 50px rgba(247, 147, 26, 0.18), 0 0 100px rgba(139, 92, 246, 0.1);
+            }
+        }
+        @keyframes card-entrance {
+            0% { opacity: 0; transform: translateY(20px) scale(0.98); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        /* Animated border — full perimeter */
+        .card-outer::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 16px;
+            padding: 2px;
+            background: linear-gradient(90deg, var(--neon-purple), var(--bitcoin), var(--neon-blue), var(--neon-purple));
+            background-size: 300% 100%;
+            animation: border-slide 4s linear infinite;
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            z-index: 10;
+            pointer-events: none;
+        }
+        @keyframes border-slide {
+            0% { background-position: 0% 0; }
+            100% { background-position: 300% 0; }
+        }
+
+        /* Floating particles background */
+        .card-particles {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            overflow: hidden;
+            z-index: 0;
+        }
+        .particle {
+            position: absolute;
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            opacity: 0;
+            animation: float-up 8s infinite;
+        }
+        @keyframes float-up {
+            0% { transform: translateY(100vh) scale(0); opacity: 0; }
+            10% { opacity: 0.6; }
+            90% { opacity: 0.2; }
+            100% { transform: translateY(-10vh) scale(1.5); opacity: 0; }
+        }
+
+        /* Banner — taller with overlay */
+        .card-banner {
+            width: 100%;
+            height: 180px;
+            border-radius: 16px 16px 0 0;
+            object-fit: cover;
+            display: block;
+        }
+        .card-banner-fallback {
+            width: 100%;
+            height: 180px;
+            border-radius: 16px 16px 0 0;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.4), rgba(247, 147, 26, 0.25), rgba(6, 182, 212, 0.3));
+            position: relative;
+            overflow: hidden;
+        }
+        .card-banner-fallback::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(ellipse at 30% 50%, rgba(139, 92, 246, 0.3) 0%, transparent 60%),
+                        radial-gradient(ellipse at 70% 50%, rgba(247, 147, 26, 0.2) 0%, transparent 60%);
+            animation: banner-pulse 6s ease-in-out infinite alternate;
+        }
+        @keyframes banner-pulse {
+            0% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        /* Main card body */
+        .card-body {
+            background: var(--bg-card);
+            border: 1px solid transparent;
+            border-top: none;
+            border-radius: 0 0 16px 16px;
+            padding: 0 1.5rem 1.75rem;
+            position: relative;
+        }
+
+        /* Avatar — larger with ring */
+        .card-avatar-wrap {
+            display: flex;
+            justify-content: center;
+            margin-top: -52px;
+            margin-bottom: 0.75rem;
+            position: relative;
+            z-index: 2;
+        }
+        .card-avatar-ring {
+            position: relative;
+            width: 104px;
+            height: 104px;
+            border-radius: 50%;
+            padding: 3px;
+            background: linear-gradient(135deg, var(--neon-purple), var(--bitcoin), var(--neon-blue));
+            animation: ring-rotate 6s linear infinite;
+            background-size: 200% 200%;
+        }
+        @keyframes ring-rotate {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .card-avatar {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 3px solid var(--bg-card);
+            background: var(--bg-card);
+        }
+        .card-avatar-placeholder {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            border: 3px solid var(--bg-card);
+            background: linear-gradient(135deg, var(--neon-purple), var(--bitcoin));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2rem;
+            color: #fff;
+        }
+
+        /* Status dot - removed */
+
+        /* Identity */
+        .card-name {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.4rem;
+            color: var(--text-bright);
+            text-align: center;
+            margin-bottom: 0.25rem;
+            letter-spacing: 0.5px;
+        }
+        .card-nip05 {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.78rem;
+            color: var(--neon-purple);
+            text-align: center;
+            margin-bottom: 0.15rem;
+        }
+        .card-npub {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            text-align: center;
+            margin-bottom: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+        }
+        .card-npub:hover {
+            color: var(--neon-purple);
+            background: rgba(139, 92, 246, 0.08);
+        }
+        .card-bio {
+            color: var(--text);
+            font-size: 0.85rem;
+            text-align: center;
+            margin-bottom: 1.25rem;
+            line-height: 1.6;
+            max-height: 4.8em;
+            overflow: hidden;
+        }
+
+        /* Identity badges — glass style */
+        .card-badges {
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+            margin-bottom: 1.25rem;
+        }
+        .badge-row {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.55rem 0.85rem;
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(4px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+        .badge-row:hover {
+            border-color: rgba(139, 92, 246, 0.3);
+            background: rgba(139, 92, 246, 0.04);
+        }
+        .badge-icon {
+            font-size: 1rem;
+            width: 1.4rem;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .badge-label {
+            color: var(--text-muted);
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-family: 'Share Tech Mono', monospace;
+            min-width: 55px;
+        }
+        .badge-value {
+            color: var(--text-bright);
+            font-size: 0.8rem;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .badge-value a {
+            color: var(--neon-purple);
+            text-decoration: none;
+        }
+        .badge-value a:hover { text-decoration: underline; }
+
+        /* Unified fancy badge row */
+        .badge-fancy {
+            border-color: rgba(200, 120, 100, 0.3);
+            background: linear-gradient(135deg, rgba(247, 147, 26, 0.06), rgba(139, 92, 246, 0.06));
+            position: relative;
+            overflow: hidden;
+        }
+        .badge-fancy::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.07), rgba(247, 147, 26, 0.07), transparent);
+            background-size: 300% 100%;
+            animation: badge-shimmer 4s ease-in-out infinite;
+        }
+        @keyframes badge-shimmer {
+            0% { background-position: -300% 0; }
+            100% { background-position: 300% 0; }
+        }
+        .badge-fancy .badge-icon {
+            filter: drop-shadow(0 0 4px rgba(247, 147, 26, 0.4)) drop-shadow(0 0 6px rgba(139, 92, 246, 0.3));
+        }
+        .badge-fancy .badge-label {
+            color: var(--text);
+            font-size: 0.72rem;
+            font-weight: 500;
+            letter-spacing: 1px;
+        }
+        .badge-fancy .badge-value {
+            color: #fff;
+            font-size: 0.85rem;
+            font-weight: 600;
+            position: relative;
+            z-index: 1;
+            text-shadow: 0 0 8px rgba(255, 255, 255, 0.1);
+        }
+        .badge-fancy .badge-value a {
+            background: linear-gradient(135deg, var(--bitcoin), var(--neon-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .badge-fancy .badge-value a:hover {
+            filter: brightness(1.3);
+        }
+        .badge-tag {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.5rem;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            background: linear-gradient(135deg, rgba(247, 147, 26, 0.15), rgba(139, 92, 246, 0.15));
+            border: 1px solid rgba(200, 120, 100, 0.3);
+            border-radius: 4px;
+            padding: 0.15rem 0.45rem;
+            margin-left: 0.4rem;
+            position: relative;
+            z-index: 1;
+            animation: tag-pulse 3s ease-in-out infinite;
+        }
+        .badge-tag-verified {
+            color: var(--bitcoin);
+        }
+        .badge-tag-premium {
+            color: var(--neon-purple);
+        }
+        @keyframes tag-pulse {
+            0%, 100% { box-shadow: 0 0 4px rgba(139, 92, 246, 0.15), 0 0 4px rgba(247, 147, 26, 0.15); }
+            50% { box-shadow: 0 0 10px rgba(139, 92, 246, 0.3), 0 0 10px rgba(247, 147, 26, 0.3); }
+        }
+
+        /* Find me on */
+        .find-me {
+            margin-bottom: 1.25rem;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.05), rgba(247, 147, 26, 0.04));
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1rem;
+        }
+        .find-me-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin-bottom: 0.65rem;
+            text-align: center;
+            background: linear-gradient(135deg, var(--neon-purple), var(--bitcoin));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .client-links {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .client-btn {
+            padding: 0.55rem 1rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(139, 92, 246, 0.2);
+            border-radius: 8px;
+            color: var(--text-bright);
+            text-decoration: none;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.78rem;
+            font-weight: 500;
+            transition: all 0.25s;
+        }
+        .client-btn:hover {
+            border-color: var(--neon-purple);
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(247, 147, 26, 0.08));
+            color: #fff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.2), 0 2px 8px rgba(247, 147, 26, 0.1);
+        }
+
+        /* Action buttons — larger, bolder */
+        .card-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .card-actions .btn {
+            flex: 1;
+            text-align: center;
+            padding: 0.7rem 0.5rem;
+            font-size: 0.8rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-family: 'Share Tech Mono', monospace;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            transition: all 0.25s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+        }
+        .btn-zap {
+            background: linear-gradient(135deg, var(--bitcoin), #e8850f);
+            color: #fff;
+            border: none;
+            font-weight: 600;
+        }
+        .btn-zap:hover {
+            box-shadow: 0 0 20px var(--bitcoin-glow), 0 4px 15px rgba(247, 147, 26, 0.3);
+            filter: brightness(1.1);
+            transform: translateY(-1px);
+        }
+        .btn-follow {
+            background: transparent;
+            border: 1px solid var(--neon-purple);
+            color: var(--neon-purple);
+            border-radius: 8px;
+            font-family: 'Share Tech Mono', monospace;
+            cursor: pointer;
+            transition: all 0.25s;
+        }
+        .btn-follow:hover {
+            background: rgba(139, 92, 246, 0.15);
+            box-shadow: 0 0 12px rgba(139, 92, 246, 0.2);
+        }
+        .btn-share {
+            background: linear-gradient(135deg, var(--neon-purple), #7c3aed);
+            color: #fff;
+            border: none;
+            font-weight: 600;
+        }
+        .btn-share:hover {
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.4), 0 4px 15px rgba(139, 92, 246, 0.3);
+            filter: brightness(1.1);
+            transform: translateY(-1px);
+        }
+
+        /* Custom links — glass cards */
+        .card-links {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-bottom: 1.25rem;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.05), rgba(247, 147, 26, 0.04));
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1rem;
+        }
+        .card-links-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin-bottom: 0.65rem;
+            text-align: center;
+            background: linear-gradient(135deg, var(--neon-purple), var(--bitcoin));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .card-link {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            background: linear-gradient(135deg, rgba(247, 147, 26, 0.04), rgba(139, 92, 246, 0.04));
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(200, 120, 100, 0.2);
+            border-radius: 10px;
+            color: #fff;
+            text-decoration: none;
+            font-size: 0.88rem;
+            font-weight: 600;
+            text-align: center;
+            transition: all 0.25s;
+            position: relative;
+            overflow: hidden;
+        }
+        .card-link::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.06), rgba(247, 147, 26, 0.06), transparent);
+            background-size: 300% 100%;
+            animation: link-shimmer 5s ease-in-out infinite;
+        }
+        @keyframes link-shimmer {
+            0% { background-position: -300% 0; }
+            100% { background-position: 300% 0; }
+        }
+        .card-link:hover {
+            border-color: rgba(200, 120, 100, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(139, 92, 246, 0.2), 0 2px 10px rgba(247, 147, 26, 0.1);
+        }
+        .card-link span { position: relative; z-index: 1; }
+        .card-link-arrow {
+            font-size: 0.75rem;
+            opacity: 0;
+            transform: translateX(-4px);
+            transition: all 0.25s;
+            position: relative;
+            z-index: 1;
+            background: linear-gradient(135deg, var(--neon-purple), var(--bitcoin));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .card-link:hover .card-link-arrow {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        /* QR section — fancy */
+        .card-qr-section {
+            text-align: center;
+            padding: 1.25rem;
+            margin-top: 1rem;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.06), rgba(247, 147, 26, 0.04));
+            border: 1px solid rgba(200, 120, 100, 0.2);
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        .card-qr-section::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(139,92,246,0.05), rgba(247,147,26,0.05), transparent);
+            background-size: 300% 100%;
+            animation: qr-shimmer 5s ease-in-out infinite;
+        }
+        @keyframes qr-shimmer {
+            0% { background-position: -300% 0; }
+            100% { background-position: 300% 0; }
+        }
+        .card-qr-frame {
+            position: relative;
+            display: inline-block;
+            padding: 3px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, var(--neon-purple), var(--bitcoin), var(--neon-blue), var(--neon-purple));
+            background-size: 300% 300%;
+            animation: qr-border-spin 4s linear infinite;
+            margin: 0.75rem auto;
+        }
+        @keyframes qr-border-spin {
+            0% { background-position: 0% 0%; }
+            100% { background-position: 300% 300%; }
+        }
+        .card-qr-frame-inner {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 10px;
+        }
+        .card-qr-section canvas {
+            border-radius: 8px;
+            display: block;
+            image-rendering: pixelated;
+        }
+        .card-qr-label {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            background: linear-gradient(135deg, var(--neon-purple), var(--bitcoin));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            position: relative;
+            z-index: 1;
+        }
+        .card-qr-sublabel {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-top: 0.3rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Why Nostr banner — glass */
+        .nostr-banner {
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.06), rgba(6, 182, 212, 0.04));
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(139, 92, 246, 0.15);
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            margin-top: 1.25rem;
+            text-align: center;
+        }
+        .nostr-banner .nb-text {
+            font-size: 0.78rem;
+            color: var(--text);
+            margin-bottom: 0.4rem;
+            line-height: 1.5;
+        }
+        .nostr-banner .nb-text strong {
+            color: var(--neon-purple);
+            font-weight: 700;
+        }
+        .nostr-banner .nb-sub {
+            font-size: 0.68rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        /* Get your card CTA — animated */
+        .cta-section {
+            text-align: center;
+            margin-top: 1.25rem;
+        }
+        .btn-cta {
+            display: inline-block;
+            padding: 0.8rem 2.2rem;
+            background: linear-gradient(135deg, var(--neon-purple), #7c3aed);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 0.85rem;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        .btn-cta::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.1) 50%, transparent 70%);
+            transform: rotate(45deg);
+            animation: cta-shine 3s infinite;
+        }
+        @keyframes cta-shine {
+            0% { transform: translateX(-100%) rotate(45deg); }
+            100% { transform: translateX(100%) rotate(45deg); }
+        }
+        .btn-cta:hover {
+            box-shadow: 0 0 30px rgba(139, 92, 246, 0.5), 0 8px 25px rgba(139, 92, 246, 0.3);
+            transform: translateY(-2px);
+            text-shadow: none;
+        }
+
+        /* Footer */
+        .card-footer {
+            text-align: center;
+            padding: 1rem 0 0.5rem;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+        }
+        .card-footer a {
+            color: var(--neon-purple);
+            text-decoration: none;
+        }
+        .card-footer a:hover { text-decoration: underline; }
+
+        /* Skeleton loading */
+        .card-loading {
+            text-align: center;
+            padding: 1rem 0;
+            color: var(--text-muted);
+            font-family: 'Share Tech Mono', monospace;
+        }
+        .skeleton {
+            background: linear-gradient(90deg, rgba(139,92,246,0.06) 25%, rgba(139,92,246,0.12) 50%, rgba(139,92,246,0.06) 75%);
+            background-size: 200% 100%;
+            animation: skeleton-shimmer 1.5s ease-in-out infinite;
+            border-radius: 8px;
+        }
+        @keyframes skeleton-shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        .skeleton-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 0 30px rgba(139,92,246,0.1);
+        }
+        .skeleton-banner { height: 120px; border-radius: 0; }
+        .skeleton-avatar {
+            width: 80px; height: 80px;
+            border-radius: 50%;
+            margin: -40px auto 0;
+            border: 3px solid var(--bg-card);
+        }
+        .skeleton-line {
+            height: 14px;
+            margin: 12px auto;
+        }
+        .skeleton-line.w60 { width: 60%; }
+        .skeleton-line.w80 { width: 80%; }
+        .skeleton-line.w40 { width: 40%; }
+        .skeleton-badges {
+            display: flex; flex-direction: column; gap: 8px;
+            padding: 0 1.25rem; margin-top: 16px;
+        }
+        .skeleton-badge { height: 40px; }
+        .skeleton-btns {
+            display: flex; gap: 10px;
+            padding: 16px 1.25rem 1.25rem;
+        }
+        .skeleton-btn { height: 38px; flex: 1; }
+        .card-error {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--red);
+            font-family: 'Share Tech Mono', monospace;
+        }
+
+        /* Verified badge — Twitter-style orange */
+        .verified {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            margin-left: 0.35rem;
+            vertical-align: middle;
+            position: relative;
+            animation: verified-badge-glow 2s ease-in-out infinite;
+        }
+        .verified svg {
+            width: 100%;
+            height: 100%;
+            filter: drop-shadow(0 0 4px rgba(247, 147, 26, 0.5));
+        }
+        .verified::after {
+            content: '';
+            position: absolute;
+            inset: -3px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(247, 147, 26, 0.3);
+            animation: verified-ring-pulse 2s ease-in-out infinite;
+        }
+        @keyframes verified-badge-glow {
+            0%, 100% { filter: drop-shadow(0 0 4px rgba(247, 147, 26, 0.4)); }
+            50% { filter: drop-shadow(0 0 10px rgba(247, 147, 26, 0.7)); }
+        }
+        @keyframes verified-ring-pulse {
+            0%, 100% { opacity: 0.4; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.15); }
+        }
+
+        /* Mobile responsiveness */
+        @media (max-width: 480px) {
+            .card-container {
+                padding: 0 0.5rem;
+            }
+            .card-body {
+                padding: 0 1rem 1.25rem;
+            }
+            .card-banner, .card-banner-fallback {
+                height: 140px;
+            }
+            .card-avatar-wrap {
+                margin-top: -40px;
+            }
+            .card-avatar-ring {
+                width: 86px;
+                height: 86px;
+            }
+            .card-name {
+                font-size: 1.15rem;
+            }
+            .card-nip05 {
+                font-size: 0.7rem;
+                word-break: break-all;
+            }
+            .card-npub {
+                font-size: 0.6rem;
+            }
+            .card-bio {
+                font-size: 0.8rem;
+            }
+            .badge-row {
+                padding: 0.5rem 0.65rem;
+                gap: 0.4rem;
+            }
+            .badge-label {
+                min-width: 45px;
+                font-size: 0.6rem;
+            }
+            .badge-fancy .badge-label {
+                font-size: 0.65rem;
+            }
+            .badge-fancy .badge-value,
+            .badge-value {
+                font-size: 0.75rem;
+            }
+            .badge-tag {
+                font-size: 0.45rem;
+                padding: 0.1rem 0.35rem;
+                margin-left: 0.3rem;
+            }
+            .find-me {
+                padding: 0.75rem;
+            }
+            .find-me-title {
+                font-size: 0.65rem;
+                letter-spacing: 2px;
+            }
+            .client-links {
+                gap: 0.35rem;
+            }
+            .client-btn {
+                padding: 0.45rem 0.75rem;
+                font-size: 0.7rem;
+            }
+            .card-actions {
+                flex-direction: column;
+            }
+            .card-actions .btn {
+                padding: 0.65rem 0.5rem;
+                font-size: 0.78rem;
+            }
+            .card-link {
+                padding: 0.65rem 0.85rem;
+                font-size: 0.8rem;
+            }
+            .card-qr-section canvas {
+                max-width: 120px;
+            }
+            .card-qr-section {
+                padding: 1rem;
+            }
+            .nostr-banner {
+                padding: 0.75rem;
+            }
+            .nostr-banner .nb-text {
+                font-size: 0.72rem;
+            }
+            .nostr-banner .nb-sub {
+                font-size: 0.63rem;
+            }
+            .btn-cta {
+                padding: 0.7rem 1.5rem;
+                font-size: 0.8rem;
+                width: 100%;
+            }
+            .status-dot {
+                display: none;
+            }
+        }
+
+        @media (max-width: 360px) {
+            .card-body {
+                padding: 0 0.75rem 1rem;
+            }
+            .card-name {
+                font-size: 1.05rem;
+            }
+            .card-avatar-ring {
+                width: 76px;
+                height: 76px;
+            }
+            .card-avatar-wrap {
+                margin-top: -36px;
+            }
+            .client-btn {
+                padding: 0.4rem 0.6rem;
+                font-size: 0.65rem;
+            }
+            .badge-row {
+                padding: 0.45rem 0.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Floating particles -->
+    <div class="card-particles" id="particles"></div>
+
+    <div class="card-container" style="padding-top: 2rem; padding-bottom: 2rem; position: relative; z-index: 1;">
+        <div id="card-root">
+            <div class="card-loading">
+                <div class="skeleton-card">
+                    <div class="skeleton skeleton-banner"></div>
+                    <div class="skeleton skeleton-avatar"></div>
+                    <div class="skeleton skeleton-line w60"></div>
+                    <div class="skeleton skeleton-line w40"></div>
+                    <div class="skeleton skeleton-line w80"></div>
+                    <div class="skeleton-badges">
+                        <div class="skeleton skeleton-badge"></div>
+                        <div class="skeleton skeleton-badge"></div>
+                        <div class="skeleton skeleton-badge"></div>
+                    </div>
+                    <div class="skeleton-btns">
+                        <div class="skeleton skeleton-btn"></div>
+                        <div class="skeleton skeleton-btn"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR code: qrcode-generator (CDN, MIT license) -->
+    <script async src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js" integrity="sha384-lQXOAyZwHXE55JFyrOMB7nY2Wv+m5ZWNtJcHrd1rceRQXAYNLak8ukN5TjBTcIwz" crossorigin="anonymous"></script>
+    <script src="/js/card.js?v=5"></script>
+</body>
+</html>

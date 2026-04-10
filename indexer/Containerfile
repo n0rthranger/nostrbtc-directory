@@ -1,0 +1,30 @@
+# Build stage — compile C extensions
+# Pinned 2026-04-06
+FROM python:3.12-slim@sha256:0bbd3d5f3abb2024c1b92ce69e8bdfefa17c248999827c34e2ed52ba0772da1b AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev libsecp256k1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Runtime stage — no compiler, no dev headers
+FROM python:3.12-slim@sha256:0bbd3d5f3abb2024c1b92ce69e8bdfefa17c248999827c34e2ed52ba0772da1b
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 libsecp256k1-2 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /usr/local
+
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
+WORKDIR /app
+
+COPY worker.py nostr_crypto_shared.py .
+
+RUN chown -R appuser:appuser /app
+USER appuser
+
+CMD ["python3", "-u", "worker.py"]

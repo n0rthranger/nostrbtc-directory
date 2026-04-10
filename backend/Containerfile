@@ -1,0 +1,25 @@
+# Pinned 2026-04-06
+FROM python:3.12-slim@sha256:0bbd3d5f3abb2024c1b92ce69e8bdfefa17c248999827c34e2ed52ba0772da1b
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libsecp256k1-dev pkg-config fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+# shared/nostr_crypto.py is copied into build context by start.sh
+COPY nostr_crypto_shared.py .
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+EXPOSE 8080
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log"]

@@ -1,0 +1,10 @@
+.env
+*.pem
+*.key
+__pycache__/
+*.pyc
+data/
+.sync-state/
+*.mdb
+*.mdb-lock
+node_modules/

@@ -1,0 +1,6 @@
+websockets==14.1
+redis==5.2.1
+psycopg2-binary==2.9.10
+httpx==0.28.1
+secp256k1==0.14.0
+neo4j==5.27.0

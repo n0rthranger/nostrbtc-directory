@@ -1,0 +1,13 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+pydantic==2.10.4
+python-multipart==0.0.22
+websockets==14.1
+secp256k1==0.14.0
+cryptography==46.0.6
+Pillow==12.1.1
+pywebpush==2.0.1
+psycopg2-binary==2.9.10
+redis==5.2.1
+neo4j==5.27.0
