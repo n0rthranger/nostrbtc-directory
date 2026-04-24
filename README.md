@@ -6,8 +6,8 @@ A personalized Web of Trust directory for Nostr, powered by [GrapeRank](https://
 
 ## What It Does
 
-- **Personalized trust scoring** — Every directory member gets a per-observer GrapeRank trust score based on the social graph (follows, zaps, replies, reactions, mutes, reports). Two different users see different rankings.
-- **NIP-85 Trusted Assertion publishing** — The relay publishes kind 30382 events containing per-observer trust scores, making Web of Trust data available to any Nostr client.
+- **Personalized trust scoring** — Every directory member gets a per-observer GrapeRank trust score from the follow graph, with mutes and reports as negative signals. Two different users can see different rankings.
+- **NIP-85 Trusted Assertion publishing** — The relay publishes kind 30382 rank assertions, making Web of Trust data available to any Nostr client that knows the observer's service-provider pubkey.
 - **Member discovery** — Given an npub, recommends directory members the user doesn't yet follow, ranked by trust score.
 - **Follow recommendations** — Suggests who to follow based on the trust graph and community structure.
 - **Decentralized directory** — Directory membership is published as kind 9998/9999 events for censorship-resistant, cryptographically verifiable listings.
@@ -69,12 +69,14 @@ A personalized Web of Trust directory for Nostr, powered by [GrapeRank](https://
 ### Data Flow
 
 1. **strfry** stores Nostr events (profiles, follows, zaps, reactions, etc.)
-2. **Indexer worker** tails strfry's WebSocket, extracts social signals, and syncs the follow graph to **Neo4j**
+2. **Indexer worker** tails strfry's WebSocket, extracts social signals, and syncs the GrapeRank graph (follows, mutes, reports) to **Neo4j**
 3. Every 6 hours, the indexer triggers a **GrapeRank** computation via Redis message queue
 4. **GrapeRank (Java)** reads the social graph from Neo4j, computes per-observer trust scores, and writes results to **Postgres**
 5. The **directory indexer** (inside the backend) pre-computes profile data every 15 minutes: NIP-05 verification, Lightning reachability, badges, and trust statistics
 6. The **backend** serves all directory API endpoints, reading from Postgres and Redis
-7. The indexer publishes **NIP-85 kind 30382** events back to strfry with per-observer trust assertions
+7. The indexer publishes **NIP-85 kind 30382** events back to strfry. Each observer uses a dedicated service-provider key so addressable rank events do not collide across observers.
+
+> Production note: nostrbtc.com now runs the GrapeRank computation directly from Postgres in Python. This public repository still includes the Java/Neo4j worker as an open-source batch-worker option, but the standalone Python reference and NIP-85 event shape are kept aligned with the production nostrbtc.com implementation.
 
 ## Prerequisites
 
@@ -82,7 +84,7 @@ A personalized Web of Trust directory for Nostr, powered by [GrapeRank](https://
 - **Java 21+** (or Docker) — GrapeRank worker
 - **PostgreSQL 15+** — profile and trust score storage
 - **Redis 7+** — caching, message queue, rate limiting
-- **Neo4j 5+** — social graph (follow/mute/zap edges)
+- **Neo4j 5+** — GrapeRank graph (follow/mute/report edges)
 - **strfry** — Nostr relay (event store and WebSocket server)
 - **Podman** or **Docker** — container orchestration
 
@@ -129,12 +131,15 @@ podman run -d --name directory-neo4j -p 7687:7687 \
 ### 4. Build and Start Application Services
 
 ```bash
+# Build service images from the repository root so shared/nostr_crypto.py is
+# copied into each image as nostr_crypto_shared.py.
+
 # Backend
-podman build -t directory-backend -f backend/Containerfile backend/
+podman build -t directory-backend -f backend/Containerfile .
 podman run -d --name directory-backend --env-file .env directory-backend
 
 # Indexer
-podman build -t directory-indexer -f indexer/Containerfile indexer/
+podman build -t directory-indexer -f indexer/Containerfile .
 podman run -d --name directory-indexer --env-file .env directory-indexer
 
 # GrapeRank Java worker
@@ -149,20 +154,19 @@ Point a web server (Caddy, nginx, etc.) at the `frontend/` directory and proxy `
 
 ## NIP-85 Event Format
 
-The relay publishes kind 30382 (Trusted Assertion) events per observer. Each event contains trust scores for all directory members as seen from one observer's perspective.
+The relay publishes NIP-85 kind 30382 (trusted assertion) rank events. NIP-85 ranks are integer values from 0 to 100, so raw GrapeRank scores are converted with `ceil(score * 100)` and clamped to `0..100`.
+
+Personalized scores need one service-provider pubkey per observer. In this repository those keys are stored in `service_provider_keys`; the event author is the observer's service-provider pubkey, and the `d` tag is the target pubkey being ranked.
 
 ```json
 {
   "kind": 30382,
-  "pubkey": "<relay-signing-pubkey>",
+  "pubkey": "<observer-service-provider-pubkey>",
   "created_at": 1712345678,
   "tags": [
-    ["d", "<observer-pubkey-hex>"],
-    ["t", "<target-pubkey-1>", "0.85", "3"],
-    ["t", "<target-pubkey-2>", "0.72", "5"],
-    ["t", "<target-pubkey-3>", "0.41", "8"],
-    ["L", "nip85.trust"],
-    ["l", "graperank", "nip85.trust"]
+    ["d", "<target-pubkey-hex>"],
+    ["rank", "27"],
+    ["p", "<target-pubkey-hex>"]
   ],
   "content": "",
   "sig": "..."
@@ -173,12 +177,11 @@ The relay publishes kind 30382 (Trusted Assertion) events per observer. Each eve
 
 | Tag | Fields | Description |
 |-----|--------|-------------|
-| `d` | `<observer-pubkey>` | The observer whose perspective this assertion represents (NIP-33 replaceable identifier) |
-| `t` | `<target-pubkey>`, `<score>`, `<hops>` | Trust score (0.0-1.0) and graph distance from observer to target |
-| `L` | `nip85.trust` | Label namespace (NIP-32) |
-| `l` | `graperank`, `nip85.trust` | Algorithm identifier within the namespace |
+| `d` | `<target-pubkey>` | The pubkey being ranked |
+| `rank` | `<0-100 integer>` | NIP-85 rank derived from the raw 0-1 GrapeRank score |
+| `p` | `<target-pubkey>` | Relay hint tag for clients that index by pubkey tag |
 
-Clients can query `{"kinds": [30382], "#d": ["<observer-pubkey>"]}` to get personalized trust scores for any observer.
+Clients can query `{"kinds": [30382], "authors": ["<observer-service-provider-pubkey>"]}` for one observer's rank assertions, or add `"#d": ["<target-pubkey>"]` for one target. Historical malformed assertions can be removed with NIP-09 kind 5 deletion events signed by the same service-provider key.
 
 ## API Endpoints
 
@@ -203,7 +206,7 @@ Clients can query `{"kinds": [30382], "#d": ["<observer-pubkey>"]}` to get perso
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/directory/trust-lookup?observer=X&target=Y` | Trust score between two pubkeys with explanation |
-| `GET` | `/api/directory/trust-lookup/signals?observer=X&target=Y` | Raw trust signals (follows, zaps, etc.) |
+| `GET` | `/api/directory/trust-lookup/signals?observer=X&target=Y` | Raw relationship and interaction signals for a lookup |
 | `GET` | `/api/directory/trust-graph?observer=X` | Full trust subgraph for visualization |
 | `GET` | `/api/directory/trust-path?from=X&to=Y` | Shortest trust path between two pubkeys |
 | `GET` | `/api/directory/trust-stats` | Global trust distribution statistics |
@@ -232,15 +235,17 @@ Clients can query `{"kinds": [30382], "#d": ["<observer-pubkey>"]}` to get perso
 
 GrapeRank computes personalized trust scores using a capped weighted average over the social graph. Key parameters:
 
-- **Attenuation** (0.7) — Trust decays as it propagates through the graph
-- **Rigor** (0.2) — Controls how much evidence is needed before trusting a score
+- **Attenuation** (0.85) — Trust decays as it propagates through the graph
+- **Rigor** (0.5) — Controls how much evidence is needed before trusting a score
 - **Observer confidence** (0.5) — The observer's self-trust seed value
+- **Follow confidence** (0.03) — Non-observer follows are weak evidence
+- **Mute/report rating** (-0.1) — Negative signals reduce score when coming from trusted raters
 
 The algorithm is sybil-resistant: a cluster of fake accounts all following each other cannot inflate their scores because the trust must originate from the observer's direct connections.
 
 Two implementations are included:
-- **Python** (`indexer/graperank.py`) — Reference implementation, used for single-observer computations
-- **Java** (`graperank-java/`) — High-performance implementation for batch computation across all observers
+- **Python** (`indexer/graperank.py`) — Standalone reference implementation aligned with nostrbtc.com production tests
+- **Java** (`graperank-java/`) — Batch-worker option derived from the upstream algorithm
 
 ## Credits
 

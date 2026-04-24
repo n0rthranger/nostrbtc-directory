@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY requirements.txt .
+COPY indexer/requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # Runtime stage — no compiler, no dev headers
@@ -22,7 +22,8 @@ COPY --from=builder /install /usr/local
 RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
 WORKDIR /app
 
-COPY worker.py nostr_crypto_shared.py .
+COPY indexer/worker.py .
+COPY shared/nostr_crypto.py ./nostr_crypto_shared.py
 
 RUN chown -R appuser:appuser /app
 USER appuser

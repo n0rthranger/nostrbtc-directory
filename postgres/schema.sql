@@ -99,3 +99,19 @@ CREATE TABLE IF NOT EXISTS personalized_scores (
 
 CREATE INDEX IF NOT EXISTS idx_personalized_observer ON personalized_scores(observer_pubkey);
 CREATE INDEX IF NOT EXISTS idx_personalized_target ON personalized_scores(target_pubkey);
+
+-- Per-observer NIP-85 service-provider keys.
+-- kind 30382 is addressable by (author, kind, d); personalized trust therefore
+-- needs one service-provider author per observer so targets do not overwrite
+-- each other across different observers' webs of trust.
+CREATE TABLE IF NOT EXISTS service_provider_keys (
+    observer_pubkey TEXT PRIMARY KEY,
+    sp_pubkey       TEXT NOT NULL UNIQUE,
+    sp_privkey_enc  TEXT NOT NULL,
+    profile_published_at TIMESTAMPTZ,
+    assertions_published_at TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE service_provider_keys IS 'Encrypted per-observer service-provider keys for NIP-85 kind 30382 assertions.';
+COMMENT ON COLUMN service_provider_keys.sp_privkey_enc IS 'AES-256-GCM encrypted private key; never log or expose.';

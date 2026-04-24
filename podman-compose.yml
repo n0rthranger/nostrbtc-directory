@@ -16,8 +16,8 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Containerfile
+      context: .
+      dockerfile: backend/Containerfile
     container_name: directory-backend
     restart: unless-stopped
     # NOTE: Production uses start.sh with --secret flags (podman secrets).

@@ -4,3 +4,4 @@ psycopg2-binary==2.9.10
 httpx==0.28.1
 secp256k1==0.14.0
 neo4j==5.27.0
+cryptography==46.0.7

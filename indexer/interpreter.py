@@ -20,8 +20,7 @@
 Interpreter: converts Nostr social graph data into GrapeRank Rating objects.
 
 Data sources:
-- trust_edges table (Postgres): follows, reposts, reactions, zaps
-- strfry WebSocket queries: kind 10000 mutes, kind 1984 reports
+- strfry WebSocket queries: kind 3 follows, kind 10000 mutes, kind 1984 reports
 """
 
 import json

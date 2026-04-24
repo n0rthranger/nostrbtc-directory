@@ -9,12 +9,11 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-# shared/nostr_crypto.py is copied into build context by start.sh
-COPY nostr_crypto_shared.py .
+COPY backend/ .
+COPY shared/nostr_crypto.py ./nostr_crypto_shared.py
 
 RUN chown -R appuser:appuser /app
 

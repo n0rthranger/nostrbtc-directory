@@ -16,8 +16,8 @@ Connects to strfry WebSocket, processes incoming events:
 - kind 0: upsert profile into directory_profiles (Postgres)
 - kind 1: increment note_count, update last_active
 - kind 3: update trust_edges (Postgres) + sync follow graph to Neo4j
-- kind 6/7: track interactions for trust graph
-- kind 9735: track zaps for trust graph
+- kind 6/7: track repost/reaction signals for directory analytics
+- kind 9735: track zap signals for directory analytics
 - kind 10000: sync mute edges to Neo4j
 - kind 1984: sync report edges to Neo4j
 
@@ -36,10 +36,12 @@ Schedule:
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import signal
 import time
@@ -90,24 +92,12 @@ NEO4J_REBUILD_LIMIT = int(os.environ.get("NEO4J_REBUILD_LIMIT", "500000"))
 
 TRACKED_KINDS = {0, 1, 3, 6, 7, 9735, 10000, 1984}
 
-# NIP-85 config.
-# Security note: use a dedicated NIP85_SIGNING_KEY in production. Falling back
-# to RELAY_PRIVATE_KEY preserves existing deployments but reuses one key across
-# relay/admin/publishing roles and broadens blast radius if any role is exposed.
-NIP85_SIGNING_KEY = os.environ.get("NIP85_SIGNING_KEY", "")
-RELAY_PRIVATE_KEY = os.environ.get("RELAY_PRIVATE_KEY", "")
-try:
-    _relay_secret_path = "/run/secrets/NIP85_SIGNING_KEY" if NIP85_SIGNING_KEY else "/run/secrets/RELAY_PRIVATE_KEY"
-    with open(_relay_secret_path) as _f:
-        _val = _f.read().strip()
-        if _val:
-            NIP85_SIGNING_KEY = _val
-except FileNotFoundError:
-    pass
-if not NIP85_SIGNING_KEY:
-    NIP85_SIGNING_KEY = RELAY_PRIVATE_KEY
-
-NIP85_SCORE_THRESHOLD = int(os.environ.get("NIP85_SCORE_THRESHOLD", "1"))  # Only republish when score changes by more than this
+# NIP-85 config. Each observer gets a dedicated service-provider keypair, so
+# addressable kind 30382 events can use d=<target pubkey> without overwriting
+# another observer's personalized result. Private keys are AES-GCM encrypted
+# with NIP85_KEY_ENCRYPTION_SECRET or AUTH_SECRET.
+NIP85_KEY_ENCRYPTION_SECRET = _read_secret("NIP85_KEY_ENCRYPTION_SECRET") or _read_secret("AUTH_SECRET")
+NIP85_SCORE_THRESHOLD = int(os.environ.get("NIP85_SCORE_THRESHOLD", "0"))  # republish on rank change by default
 
 
 # --- Trust tiers ---
@@ -593,7 +583,7 @@ def process_kind1984(event: dict):
 
 
 def process_interaction(event: dict):
-    """Track interactions (kind 6 repost, kind 7 reaction) for trust graph."""
+    """Track interactions (kind 6 repost, kind 7 reaction) as analytics signals."""
     pubkey = event.get("pubkey", "")
     kind = event.get("kind", 0)
     tags = event.get("tags", [])
@@ -629,7 +619,7 @@ def process_interaction(event: dict):
 
 
 def process_zap(event: dict):
-    """Track zap receipts (kind 9735) for trust graph."""
+    """Track zap receipts (kind 9735) as analytics signals."""
     tags = event.get("tags", [])
 
     sender = None
@@ -883,12 +873,104 @@ def trigger_graperank_batch(observers: list) -> dict:
 # --- NIP-85 Trusted Assertions (per-observer) ---
 
 
-def _graperank_to_reputation(gr_score: float) -> int:
-    """Map raw GrapeRank 0-1 score to reputation 0-100."""
-    if gr_score <= 0:
-        return 0
-    score = 100.0 * min(gr_score, 1.0) ** 0.5
-    return min(100, max(0, int(round(score))))
+def _nip85_encryption_key() -> bytes:
+    if not NIP85_KEY_ENCRYPTION_SECRET:
+        raise RuntimeError("AUTH_SECRET or NIP85_KEY_ENCRYPTION_SECRET required for NIP-85 service keys")
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b"nostrbtc-directory-nip85-keys-v1",
+        info=b"service-provider-key-encryption",
+    ).derive(NIP85_KEY_ENCRYPTION_SECRET.encode())
+
+
+def _encrypt_service_privkey(privkey_hex: str) -> str:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    aesgcm = AESGCM(_nip85_encryption_key())
+    nonce = os.urandom(12)
+    ciphertext = aesgcm.encrypt(nonce, privkey_hex.encode(), None)
+    return base64.b64encode(nonce + ciphertext).decode()
+
+
+def _decrypt_service_privkey(encrypted: str) -> str:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    raw = base64.b64decode(encrypted)
+    nonce, ciphertext = raw[:12], raw[12:]
+    return AESGCM(_nip85_encryption_key()).decrypt(nonce, ciphertext, None).decode()
+
+
+def _register_service_provider_pubkey(sp_pubkey: str):
+    try:
+        if _redis is not None:
+            _redis.sadd(b"nostrbtc:ba_pubkeys", sp_pubkey.encode())
+    except Exception as e:
+        logger.debug(f"NIP-85: failed to register service provider pubkey {sp_pubkey[:12]}: {e}")
+
+
+def get_or_create_service_provider_key(observer: str) -> tuple[str, str]:
+    """Return the per-observer NIP-85 service-provider (pubkey, privkey)."""
+    pg = get_pg()
+    if not pg:
+        raise RuntimeError("Postgres unavailable")
+    try:
+        with pg.cursor() as cur:
+            cur.execute(
+                "SELECT sp_pubkey, sp_privkey_enc FROM service_provider_keys WHERE observer_pubkey = %s",
+                (observer,),
+            )
+            row = cur.fetchone()
+        if row:
+            _register_service_provider_pubkey(row[0])
+            return row[0], _decrypt_service_privkey(row[1])
+
+        privkey_hex = os.urandom(32).hex()
+        sp_pubkey = _privkey_to_pubkey(privkey_hex)
+        encrypted = _encrypt_service_privkey(privkey_hex)
+        with pg.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO service_provider_keys (observer_pubkey, sp_pubkey, sp_privkey_enc)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (observer_pubkey) DO NOTHING
+                RETURNING sp_pubkey
+                """,
+                (observer, sp_pubkey, encrypted),
+            )
+            inserted = cur.fetchone()
+        pg.commit()
+        if inserted:
+            _register_service_provider_pubkey(sp_pubkey)
+            return sp_pubkey, privkey_hex
+
+        with pg.cursor() as cur:
+            cur.execute(
+                "SELECT sp_pubkey, sp_privkey_enc FROM service_provider_keys WHERE observer_pubkey = %s",
+                (observer,),
+            )
+            row = cur.fetchone()
+        if row:
+            _register_service_provider_pubkey(row[0])
+            return row[0], _decrypt_service_privkey(row[1])
+        raise RuntimeError("service provider key creation lost race")
+    except Exception:
+        try:
+            pg.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        put_pg(pg)
+
+
+def _score_to_nip85_rank(score: float) -> int:
+    """Convert raw GrapeRank 0-1 score to the NIP-85 rank integer 0-100."""
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        value = 0.0
+    return max(0, min(100, int(math.ceil(value * 100))))
 
 
 async def publish_nip85_assertions(all_observer_scores: dict, full: bool = False):
@@ -898,102 +980,24 @@ async def publish_nip85_assertions(all_observer_scores: dict, full: bool = False
         all_observer_scores: {observer_pubkey: {target_pubkey: score}}
         full: If True, publish all regardless of change threshold.
     """
-    if not NIP85_SIGNING_KEY:
-        logger.warning("NIP-85: no signing key configured, skipping assertions")
+    if not NIP85_KEY_ENCRYPTION_SECRET:
+        logger.warning("NIP-85: no AUTH_SECRET/NIP85_KEY_ENCRYPTION_SECRET configured, skipping assertions")
         return
     if not all_observer_scores:
         return
-
-    pg = get_pg()
-    if not pg:
-        return
-
-    # Collect all target pubkeys across all observers
-    all_targets = set()
-    for scores in all_observer_scores.values():
-        all_targets.update(scores.keys())
-
-    if not all_targets:
-        put_pg(pg)
-        return
-
-    # Fetch member metadata
-    pubkeys = list(all_targets)
-    try:
-        from psycopg2 import sql as psql
-        pk_list = psql.SQL(",").join([psql.Placeholder()] * len(pubkeys))
-        with pg.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(psql.SQL("""
-                SELECT dp.hex_pubkey, dp.nip05_verified, dp.lightning_reachable,
-                       dp.last_active,
-                       dp.name, dp.about, dp.picture, dp.banner, dp.nip05, dp.lud16, dp.website,
-                       COALESCE(s.created_at, dp.indexed_at) AS member_since
-                FROM directory_profiles dp
-                LEFT JOIN subscriptions s ON dp.hex_pubkey = s.hex_pubkey
-                WHERE dp.hex_pubkey IN ({})
-            """).format(pk_list), pubkeys)
-            profiles = {row["hex_pubkey"]: dict(row) for row in cur.fetchall()}
-
-            cur.execute(psql.SQL("""
-                SELECT target_pubkey, COUNT(*) AS cnt
-                FROM trust_edges
-                WHERE edge_type = 'follow' AND target_pubkey IN ({})
-                GROUP BY target_pubkey
-            """).format(pk_list), pubkeys)
-            follower_counts = {row[0]: row[1] for row in cur.fetchall()}
-
-            cur.execute(psql.SQL("""
-                SELECT source_pubkey, COUNT(*) AS cnt
-                FROM trust_edges
-                WHERE edge_type = 'follow' AND source_pubkey IN ({})
-                GROUP BY source_pubkey
-            """).format(pk_list), pubkeys)
-            following_counts = {row[0]: row[1] for row in cur.fetchall()}
-
-            cur.execute(psql.SQL("""
-                SELECT receiver, COALESCE(SUM(amount_msats), 0) / 1000 AS total_sats
-                FROM directory_zaps
-                WHERE receiver IN ({})
-                GROUP BY receiver
-            """).format(pk_list), pubkeys)
-            zap_totals = {row[0]: int(row[1]) for row in cur.fetchall()}
-
-            thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-            cur.execute(psql.SQL("""
-                SELECT pubkey, COUNT(*) AS active_days
-                FROM activity_heatmap
-                WHERE pubkey IN ({})
-                  AND day >= %s
-                GROUP BY pubkey
-            """).format(pk_list), pubkeys + [thirty_days_ago])
-            active_days = {row[0]: row[1] for row in cur.fetchall()}
-
-            # Get hops from personalized_scores
-            all_observers = list(all_observer_scores.keys())
-            obs_list = psql.SQL(",").join([psql.Placeholder()] * len(all_observers))
-            cur.execute(psql.SQL("""
-                SELECT observer_pubkey, target_pubkey, hops
-                FROM personalized_scores
-                WHERE observer_pubkey IN ({})
-            """).format(obs_list), all_observers)
-            hops_map = {}
-            for row in cur.fetchall():
-                hops_map.setdefault(row[0], {})[row[1]] = row[2]
-    except Exception as e:
-        logger.error(f"NIP-85: Failed to fetch member data: {e}")
-        return
-    finally:
-        put_pg(pg)
 
     # Build per-observer events
     events_to_publish = []
     skipped = 0
 
     for observer, scores in all_observer_scores.items():
+        try:
+            sp_pubkey, sp_privkey = get_or_create_service_provider_key(observer)
+        except Exception as e:
+            logger.error(f"NIP-85: failed to get service provider key for {observer[:12]}: {e}")
+            continue
         for pk, raw_score in scores.items():
-            rep_score = _graperank_to_reputation(raw_score)
-            tier = score_to_tier(raw_score)
-            hops = hops_map.get(observer, {}).get(pk, 999)
+            rank = _score_to_nip85_rank(raw_score)
 
             if not full:
                 # Redis client uses decode_responses=False so we must encode
@@ -1002,48 +1006,24 @@ async def publish_nip85_assertions(all_observer_scores: dict, full: bool = False
                 hash_key = f"directory:nip85_last:{observer}".encode()
                 last_val = _redis.hget(hash_key, pk.encode())
                 if last_val is not None:
-                    last_score = int(last_val)
-                    if abs(rep_score - last_score) <= NIP85_SCORE_THRESHOLD:
-                        skipped += 1
-                        continue
-
-            profile = profiles.get(pk, {})
-            followers = follower_counts.get(pk, 0)
-            following = following_counts.get(pk, 0)
-            zaps = zap_totals.get(pk, 0)
-            days_active = active_days.get(pk, 0)
-            member_since = profile.get("member_since")
-            member_since_ts = int(member_since.timestamp()) if member_since else 0
-            nip05_valid = "1" if profile.get("nip05_verified") else "0"
-            lightning_valid = "1" if profile.get("lightning_reachable") else "0"
-
-            follow_ratio = round(followers / max(following, 1), 2)
-            follow_ratio = min(follow_ratio, 999.0)
-
-            completeness_fields = ["name", "about", "picture", "banner", "nip05", "lud16", "website"]
-            completeness = sum(14 for f in completeness_fields if profile.get(f))
-            completeness = min(completeness, 100)
+                    try:
+                        last_rank = int(last_val)
+                    except (TypeError, ValueError):
+                        _redis.hdel(hash_key, pk.encode())
+                    else:
+                        if abs(rank - last_rank) <= NIP85_SCORE_THRESHOLD:
+                            skipped += 1
+                            continue
 
             tags = [
                 ["d", pk],
-                ["p", observer],
-                ["rank", str(rep_score)],
-                ["tier", tier],
-                ["hops", str(hops)],
-                ["algorithm", "graperank_v1"],
-                ["followers", str(followers)],
-                ["following", str(following)],
-                ["follow_ratio", str(follow_ratio)],
-                ["active_days_30", str(days_active)],
-                ["first_seen", str(member_since_ts)],
-                ["nip05_valid", nip05_valid],
-                ["lightning_valid", lightning_valid],
-                ["profile_completeness", str(completeness)],
+                ["rank", str(rank)],
+                ["p", pk],
             ]
 
             try:
-                event = _make_event(NIP85_SIGNING_KEY, kind=30382, content="", tags=tags)
-                events_to_publish.append((observer, pk, rep_score, event))
+                event = _make_event(sp_privkey, kind=30382, content="", tags=tags)
+                events_to_publish.append((observer, pk, rank, sp_pubkey, event))
             except Exception as e:
                 logger.error(f"NIP-85: Failed to sign event for {observer[:12]}→{pk[:12]}: {e}")
 
@@ -1053,24 +1033,46 @@ async def publish_nip85_assertions(all_observer_scores: dict, full: bool = False
 
     # Publish all events
     published = 0
+    published_observers = set()
     try:
         async with websockets.connect(STRFRY_URL, close_timeout=10, open_timeout=5) as ws:
-            for observer, pk, rep_score, event in events_to_publish:
+            for observer, pk, rank, sp_pubkey, event in events_to_publish:
                 try:
                     await ws.send(json.dumps(["EVENT", event]))
                     msg = await asyncio.wait_for(ws.recv(), timeout=5)
                     data = json.loads(msg)
                     if isinstance(data, list) and len(data) >= 3 and data[0] == "OK" and data[2]:
                         published += 1
-                        _redis.hset(f"directory:nip85_last:{observer}".encode(), pk.encode(), str(rep_score).encode())
+                        published_observers.add(observer)
+                        _redis.hset(f"directory:nip85_last:{observer}".encode(), pk.encode(), str(rank).encode())
                     else:
-                        logger.debug(f"NIP-85: strfry rejected for {observer[:12]}→{pk[:12]}: {data}")
+                        logger.debug(f"NIP-85: strfry rejected for {observer[:12]}→{pk[:12]} (BA {sp_pubkey[:12]}): {data}")
                 except asyncio.TimeoutError:
                     logger.debug(f"NIP-85: strfry no OK for {observer[:12]}→{pk[:12]}")
                 except Exception as e:
                     logger.debug(f"NIP-85: send failed for {observer[:12]}→{pk[:12]}: {e}")
     except Exception as e:
         logger.error(f"NIP-85: websocket connection failed: {e}")
+
+    if published_observers:
+        pg = get_pg()
+        if pg:
+            try:
+                with pg.cursor() as cur:
+                    cur.execute(
+                        "UPDATE service_provider_keys SET assertions_published_at = NOW() "
+                        "WHERE observer_pubkey = ANY(%s)",
+                        (list(published_observers),),
+                    )
+                pg.commit()
+            except Exception as e:
+                logger.debug(f"NIP-85: failed to update publish timestamps: {e}")
+                try:
+                    pg.rollback()
+                except Exception:
+                    pass
+            finally:
+                put_pg(pg)
 
     mode = "full" if full else "scheduled"
     logger.info(f"NIP-85 ({mode}): published {published}, skipped {skipped}, total {len(events_to_publish) + skipped}")
@@ -1545,6 +1547,16 @@ async def main():
                         score REAL NOT NULL DEFAULT 0,
                         tier TEXT NOT NULL DEFAULT 'unverified',
                         computed_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS service_provider_keys (
+                        observer_pubkey TEXT PRIMARY KEY,
+                        sp_pubkey TEXT NOT NULL UNIQUE,
+                        sp_privkey_enc TEXT NOT NULL,
+                        profile_published_at TIMESTAMPTZ,
+                        assertions_published_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     )
                 """)
             pg.commit()
