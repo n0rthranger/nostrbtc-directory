@@ -1,3 +1,8 @@
+/*
+ * Derived from brainstorm_graperank_algorithm by Pretty-Good-Freedom-Tech / NosFabrica / David Strayhorn.
+ * Original: https://github.com/NosFabrica/brainstorm_graperank_algorithm
+ * Licensed under AGPL-3.0 — see graperank-java/LICENSE.
+ */
 package org.example.grape;
 
 import java.util.*;

@@ -38,6 +38,19 @@ public class GrapeRankAlgorithm {
 
         int rounds = 0;
 
+        // Pre-index rater → ratees once. Replaces the inner O(|inputs|) scan
+        // that previously ran for every changed node, collapsing cost per round
+        // from O(|worklist| * |inputs|) to O(|worklist| * avg_fanout).
+        Map<String, Set<String>> raterToRatees = new HashMap<>();
+        for (Map.Entry<String, List<GrapeRankInput>> entry : graperankInputs.entrySet()) {
+            String ratee = entry.getKey();
+            for (GrapeRankInput input : entry.getValue()) {
+                raterToRatees
+                        .computeIfAbsent(input.getRater(), k -> new HashSet<>())
+                        .add(ratee);
+            }
+        }
+
         // Worklist: set of observee keys whose inputs may have changed
         Set<String> worklist = new HashSet<>(graperankScorecards.keySet());
 
@@ -81,14 +94,10 @@ public class GrapeRankAlgorithm {
                 double deltaInfluence = Math.abs(computedInfluence - scorecard.getInfluence());
 
                 if (deltaInfluence > Constants.THRESHOLD_OF_LOOP_BREAK_GIVEN_MINIMUM_DELTA_INFLUENCE) {
-                    // This node changed — schedule all nodes that depend on it
-                    for (Map.Entry<String, List<GrapeRankInput>> inputEntry : graperankInputs.entrySet()) {
-                        for (GrapeRankInput input : inputEntry.getValue()) {
-                            if (input.getRater().equals(key)) {
-                                nextWorklist.add(inputEntry.getKey());
-                                break;
-                            }
-                        }
+                    // O(1) lookup: every ratee that depends on this rater
+                    Set<String> dependents = raterToRatees.get(key);
+                    if (dependents != null) {
+                        nextWorklist.addAll(dependents);
                     }
                 }
 

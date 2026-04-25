@@ -14,7 +14,7 @@
 #
 # Licensed under AGPL-3.0 — see LICENSE file in project root.
 #
-# Python port and relay integration.
+# Python port and nostrbtc.com relay integration by nostrbtc.
 
 """
 GrapeRank: Personalized web-of-trust scoring for Nostr.
@@ -27,20 +27,27 @@ Core properties:
 """
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-# Default parameters
-DEFAULT_ATTENUATION = 0.7       # Dampening for non-observer raters
-DEFAULT_RIGOR = 0.2             # How fast confidence saturates (lower = faster)
-DEFAULT_PRECISION = 0.00001     # Convergence threshold
-DEFAULT_MAX_ITERATIONS = 100    # Hard cap on iterations
-DEFAULT_OBSERVER_CONFIDENCE = 0.5   # Confidence for observer's own ratings
-DEFAULT_FOLLOW_CONFIDENCE = 0.03    # Confidence for others' follows
-DEFAULT_MUTE_CONFIDENCE = 0.5       # Confidence for mutes
-DEFAULT_REPORT_CONFIDENCE = 0.5     # Confidence for reports
-DEFAULT_FOLLOW_SCORE = 1.0     # Rating value for a follow
-DEFAULT_MUTE_SCORE = 0.0       # Rating value for a mute
-DEFAULT_REPORT_SCORE = 0.0     # Rating value for a report
+# INDEPENDENT constants — intentionally duplicated from
+# shared/graperank_constants.py. This module is the *reference* port used by
+# tests/test_graperank.py to cross-validate the production implementation
+# in backend/graperank.py. If both pulled from shared/, a silent bug in the
+# shared values would pass the cross-check. Keep the numbers in lockstep
+# with NosFabrica/brainstorm_graperank_algorithm Constants.java — there's a
+# test (test_graperank.py::test_constants_match_shared) that asserts parity.
+DEFAULT_ATTENUATION = 0.85          # GLOBAL_ATTENUATION_FACTOR (applied to ALL raters incl. observer)
+DEFAULT_RIGOR = 0.5                 # GLOBAL_RIGOR (confidence saturation speed)
+DEFAULT_PRECISION = 0.0001          # THRESHOLD_OF_LOOP_BREAK_GIVEN_MINIMUM_DELTA_INFLUENCE
+DEFAULT_MAX_ITERATIONS = 100        # Hard cap on iterations (safety guard; upstream has none)
+DEFAULT_OBSERVER_CONFIDENCE = 0.5   # DEFAULT_CONFIDENCE_FOR_FOLLOW_FROM_OBSERVER
+DEFAULT_FOLLOW_CONFIDENCE = 0.03    # DEFAULT_CONFIDENCE_FOR_FOLLOW
+DEFAULT_MUTE_CONFIDENCE = 0.5       # DEFAULT_CONFIDENCE_FOR_MUTE
+DEFAULT_REPORT_CONFIDENCE = 0.5     # DEFAULT_CONFIDENCE_FOR_REPORT
+DEFAULT_FOLLOW_SCORE = 1.0          # DEFAULT_RATING_FOR_FOLLOW
+DEFAULT_MUTE_SCORE = -0.1           # DEFAULT_RATING_FOR_MUTE
+DEFAULT_REPORT_SCORE = -0.1         # DEFAULT_RATING_FOR_REPORT
+DEFAULT_CUTOFF_VALID_USER = 0.02    # DEFAULT_CUTOFF_OF_VALID_USER
 
 
 class Rating:
@@ -76,9 +83,10 @@ class Scorecard:
         self.sum_of_products += product
 
     def calculate(self, rigor: float):
-        # Weighted average, clamped to >= 0
+        # Weighted average (NOT clamped — upstream does not clamp average,
+        # only the final influence is clamped to >= 0)
         if self.sum_of_weights > 0:
-            self.average = max(self.sum_of_products / self.sum_of_weights, 0.0)
+            self.average = self.sum_of_products / self.sum_of_weights
         else:
             self.average = 0.0
 
@@ -118,10 +126,16 @@ def graperank(
     Returns:
         Dict mapping pubkey -> score (average * confidence), values in [0, 1].
     """
+    # Bound parameters that would otherwise silently produce degenerate output
+    # (NEW-DIR-10 / NEW-DIR-11). rigor ∈ (0,1) so confidence saturation is
+    # well-defined; attenuation ∈ [0,1] so per-hop dampening can't amplify.
+    if not (0.0 < rigor < 1.0):
+        raise ValueError(f"rigor must be in (0, 1), got {rigor}")
+    if not (0.0 <= attenuation <= 1.0):
+        raise ValueError(f"attenuation must be in [0, 1], got {attenuation}")
+
     if not pubkeys or not ratings:
         return {}
-
-    pubkey_set = set(pubkeys)
 
     # Collect all pubkeys that participate in ratings (raters + ratees)
     # Non-member raters need scorecards too so trust can propagate through them
@@ -133,46 +147,45 @@ def graperank(
     # Build scorecards for all participants
     scorecards: Dict[str, Scorecard] = {pk: Scorecard() for pk in all_participants}
 
+    # Initialize observer scorecard — same as Java initGrapeRankScorecards:
+    # observer gets influence=1.0, confidence=1.0, averageScore=1.0
+    if observer in scorecards:
+        obs_sc = scorecards[observer]
+        obs_sc.average = 1.0
+        obs_sc.confidence = 1.0
+        obs_sc.influence = 1.0
+
     # Index ratings by ratee for fast lookup
     ratings_by_ratee: Dict[str, List[Rating]] = {}
     for r in ratings:
         if r.ratee in all_participants:
             ratings_by_ratee.setdefault(r.ratee, []).append(r)
 
-    # Iterate until convergence or max iterations
+    # Iterate until convergence or max iterations. This mirrors the Java
+    # reference's full scorecard sweep: each scorecard is recalculated
+    # immediately, so later scorecards in the same round see earlier updates.
+    ordered_pubkeys = sorted(scorecards.keys())
     for iteration in range(max_iterations):
-        # Reset all sums
-        for sc in scorecards.values():
-            sc.reset()
-
-        # Accumulate weighted ratings
-        for ratee_pk, ratee_ratings in ratings_by_ratee.items():
-            sc = scorecards[ratee_pk]
-            for r in ratee_ratings:
-                if r.rater == observer:
-                    # Observer's own ratings: full influence, no attenuation
-                    influence = 1.0
-                    weight = influence * r.confidence
-                else:
-                    # Other raters: use their current influence score
-                    rater_sc = scorecards.get(r.rater)
-                    if rater_sc is None:
-                        continue
-                    influence = rater_sc.influence
-                    if influence <= 0:
-                        continue
-                    weight = influence * r.confidence * attenuation
-
-                sc.add(weight, weight * r.score)
-
-        # Calculate new scores
         converged = True
-        for sc in scorecards.values():
+        for ratee_pk in ordered_pubkeys:
+            if ratee_pk == observer:
+                continue
+            sc = scorecards[ratee_pk]
+            sc.reset()
+            for r in ratings_by_ratee.get(ratee_pk, []):
+                rater_sc = scorecards.get(r.rater)
+                if rater_sc is None:
+                    continue
+                influence = rater_sc.influence
+                if influence <= 0:
+                    continue
+                weight = influence * r.confidence * attenuation
+                sc.add(weight, weight * r.score)
             sc.calculate(rigor)
             if abs(sc.influence - sc.prev_influence) > precision:
                 converged = False
 
-        if converged and iteration > 0:
+        if converged:
             break
 
     # Return scores only for the requested pubkeys (not intermediate raters)
