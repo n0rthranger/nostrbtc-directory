@@ -123,11 +123,93 @@
 
     function hasNip07() { return !!(window.nostr && window.nostr.signEvent && window.nostr.getPublicKey); }
     function isConnected() { return !!(connected.hex && connected.npub); }
+    function waitForNip07(timeoutMs) {
+        if (hasNip07()) return Promise.resolve(true);
+        timeoutMs = timeoutMs || 2500;
+        return new Promise(function(resolve) {
+            var deadline = Date.now() + timeoutMs;
+            function check() {
+                if (hasNip07()) return resolve(true);
+                if (Date.now() >= deadline) return resolve(false);
+                setTimeout(check, 150);
+            }
+            check();
+        });
+    }
+    function bytesToBase64(bytes) {
+        var bin = '';
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin);
+    }
+    function bytesToHex(bytes) {
+        return Array.prototype.map.call(bytes, function(b) {
+            return b.toString(16).padStart(2, '0');
+        }).join('');
+    }
+    async function sha256Hex(text) {
+        if (!window.crypto || !window.crypto.subtle || !window.TextEncoder) return '';
+        var digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+        return bytesToHex(new Uint8Array(digest));
+    }
+    function nip98UrlTag(url) {
+        var parsed = new URL(url, location.href);
+        return parsed.origin === location.origin ? parsed.pathname + parsed.search : parsed.toString();
+    }
+    async function nip98Headers(method, url, bodyText) {
+        if (!isConnected()) return {};
+        if (connected.via === 'extension' && !hasNip07()) {
+            await waitForNip07(2500);
+        }
+        if (!hasNip07()) throw new Error('NIP-07 extension unavailable');
+        var signer = await window.nostr.getPublicKey();
+        if (!signer || signer.toLowerCase() !== connected.hex.toLowerCase()) {
+            throw new Error('NIP-07 signer does not match connected account');
+        }
+        var tags = [['u', nip98UrlTag(url)], ['method', method.toUpperCase()]];
+        if (bodyText) {
+            var payloadHash = await sha256Hex(bodyText);
+            if (payloadHash) tags.push(['payload', payloadHash]);
+        }
+        var ev = await window.nostr.signEvent({
+            kind: 27235,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: tags,
+            content: ''
+        });
+        if (!ev || ev.pubkey.toLowerCase() !== connected.hex.toLowerCase()) {
+            throw new Error('NIP-07 signature pubkey mismatch');
+        }
+        return { Authorization: 'Nostr ' + bytesToBase64(new TextEncoder().encode(JSON.stringify(ev))) };
+    }
+    function requestNeedsAuth(method, url) {
+        var parsed = new URL(url, location.href);
+        var path = parsed.pathname;
+        if (path === '/api/directory/compute-trust') return true;
+        if (path === '/api/directory/trust-lookup' || path === '/api/directory/trust-lookup/signals') {
+            return !!parsed.searchParams.get('observer');
+        }
+        return method !== 'GET' && path.indexOf('/api/') === 0;
+    }
+    async function signedFetch(url, options) {
+        options = options || {};
+        var method = (options.method || 'GET').toUpperCase();
+        var bodyText = typeof options.body === 'string' ? options.body : '';
+        var needsAuth = requestNeedsAuth(method, url);
+        var authHeaders = {};
+        if (needsAuth && isConnected()) {
+            authHeaders = await nip98Headers(method, url, bodyText);
+        }
+        if (needsAuth && !authHeaders.Authorization) {
+            throw new Error('NIP-07 authorization unavailable');
+        }
+        options.headers = Object.assign({}, options.headers || {}, authHeaders);
+        return fetch(url, options);
+    }
 
     function refreshLookup() {
-        if (!_lastLookupTarget || !isConnected()) return;
-        var observerParam = '&observer=' + encodeURIComponent(connected.npub);
-        fetch('/api/directory/trust-lookup?target=' + encodeURIComponent(_lastLookupTarget) + observerParam)
+        if (!_lastLookupTarget) return;
+        var observerParam = connected.via === 'extension' ? ('&observer=' + encodeURIComponent(connected.npub)) : '';
+        signedFetch('/api/directory/trust-lookup?target=' + encodeURIComponent(_lastLookupTarget) + observerParam)
             .then(function(r) { return r.ok ? r.json() : null; })
             .then(function(d) { if (d) renderResult(d); })
             .catch(function(err) { console.warn('Trust refresh failed:', err && err.message ? err.message : err); });
@@ -370,7 +452,8 @@
     function fetchMyProfile() {
         connectArea.innerHTML = '<div class="mp-loading"><div class="sc-loading-sweep"></div></div>';
 
-        fetch('/api/directory/trust-lookup?target=' + encodeURIComponent(connected.npub) + '&observer=' + encodeURIComponent(connected.npub))
+        var observerParam = connected.via === 'extension' ? ('&observer=' + encodeURIComponent(connected.npub)) : '';
+        signedFetch('/api/directory/trust-lookup?target=' + encodeURIComponent(connected.npub) + observerParam)
             .then(function(r) { return r.ok ? r.json() : null; })
             .then(function(d) {
                 if (d) {
@@ -397,9 +480,10 @@
     var _computingTrust = false;
     var _trustComputedOnce = false;
     function triggerTrustComputation() {
+        if (connected.via !== 'extension') return;
         if (_computingTrust || _trustComputedOnce) return;
         _computingTrust = true;
-        fetch('/api/directory/compute-trust', {
+        signedFetch('/api/directory/compute-trust', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ npub: connected.npub })
@@ -492,8 +576,8 @@
             '</div>';
 
         _lastLookupTarget = v;
-        var observerParam = isConnected() ? ('&observer=' + encodeURIComponent(connected.npub)) : '';
-        fetch('/api/directory/trust-lookup?target=' + encodeURIComponent(v) + observerParam)
+        var observerParam = (isConnected() && connected.via === 'extension') ? ('&observer=' + encodeURIComponent(connected.npub)) : '';
+        signedFetch('/api/directory/trust-lookup?target=' + encodeURIComponent(v) + observerParam)
             .then(function(r) {
                 if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Not found'); });
                 return r.json();
@@ -579,6 +663,12 @@
             var confidenceDesc = isPublicGrapeRank
                 ? pct + '% public GrapeRank score from Brainstorm\'s public point of view.'
                 : pct + '% confidence that <strong>' + displayName + '</strong> is a genuine participant, based on your trusted community\u2019s follows, mutes, and reports.';
+            var connectTrustHtml = (isPublicGrapeRank && (!isConnected() || connected.via !== 'extension'))
+                ? '<button type="button" class="lu-locked-btn" id="lu-locked-connect" style="margin-top:0.7rem;padding:0.5rem 1rem;font-size:0.75rem;border-radius:8px">' +
+                    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg> ' +
+                    'Connect NIP-07 for personal trust' +
+                  '</button>'
+                : '';
             trustRingHtml =
                 '<div class="lu-trust-locked">' +
                     '<div class="lu-locked-ring" style="--tier-color:' + tier.color + ';border-color:' + tier.color + '30;box-shadow:0 0 15px ' + tier.color + '25,0 0 30px ' + tier.color + '10,inset 0 0 20px rgba(0,0,0,0.5)">' +
@@ -589,6 +679,7 @@
                     '<div class="lu-confidence">' +
                         '<span class="lu-confidence-level" style="color:' + tier.color + '">' + confidenceLabel + ' confidence</span>' +
                         '<span class="lu-confidence-desc">' + confidenceDesc + '</span>' +
+                        connectTrustHtml +
                     '</div>' +
                     '<div class="lu-ring-meta">' +
                         (hopsLabel ? '<span class="lu-ring-hops">' + hopsLabel + '</span>' : '') +
@@ -1020,7 +1111,7 @@
 
         // Auto-retry trust if computing (single global timer, no re-creation on render)
         var noTrustPath = !data.computed_at && !(data.shared_follows_count > 0) && !(data.mutual_followers_count > 0) && _trustComputedOnce;
-        if (!hasTrust && !isSelf && !noTrustPath && isConnected() && _lastLookupTarget && !_trustPollActive && _trustPollRetries < 6) {
+        if (!hasTrust && !isSelf && !noTrustPath && isConnected() && connected.via === 'extension' && _lastLookupTarget && !_trustPollActive && _trustPollRetries < 6) {
             _trustPollActive = true;
             (function scheduleNextPoll() {
                 _trustPollTimer = setTimeout(function() {
@@ -1029,7 +1120,7 @@
                         _trustPollActive = false;
                         return;
                     }
-                    fetch('/api/directory/trust-lookup?target=' + encodeURIComponent(_lastLookupTarget) + '&observer=' + encodeURIComponent(connected.npub))
+                    signedFetch('/api/directory/trust-lookup?target=' + encodeURIComponent(_lastLookupTarget) + '&observer=' + encodeURIComponent(connected.npub))
                         .then(function(r) { return r.ok ? r.json() : null; })
                         .then(function(d) {
                             if (!d) { scheduleNextPoll(); return; }
@@ -1103,8 +1194,8 @@
                 btn.textContent = 'Loading...';
                 btn.disabled = true;
                 var targetParam = encodeURIComponent(data.npub || data.hex_pubkey || _lastLookupTarget);
-                var observerParam = isConnected() ? ('&observer=' + encodeURIComponent(connected.npub)) : '';
-                fetch('/api/directory/trust-lookup/signals?target=' + targetParam + '&type=' + sigType + '&page=' + page + '&limit=20' + observerParam)
+                var observerParam = (isConnected() && connected.via === 'extension') ? ('&observer=' + encodeURIComponent(connected.npub)) : '';
+                signedFetch('/api/directory/trust-lookup/signals?target=' + targetParam + '&type=' + sigType + '&page=' + page + '&limit=20' + observerParam)
                     .then(function(r) { return r.ok ? r.json() : null; })
                     .then(function(d) {
                         if (!d || !d.items || !d.items.length) {
