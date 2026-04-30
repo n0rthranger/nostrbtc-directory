@@ -75,8 +75,9 @@ A personalized Web of Trust directory for Nostr, powered by [GrapeRank](https://
 4. **GrapeRank (Java)** reads the social graph from Neo4j, computes per-observer trust scores, and writes results to **Postgres**
 5. The indexer imports public GrapeRank scores for the configured house point of view, then keeps global consensus as a fallback
 6. The **directory indexer** (inside the backend) pre-computes profile data every 15 minutes: NIP-05 verification, Lightning reachability, badges, and trust statistics
-7. The **backend** serves all directory API endpoints, reading from Postgres and Redis
-8. The indexer publishes **NIP-85 kind 30382** events back to strfry with per-observer trust assertions
+7. The scan endpoint fetches the scanned pubkey's public GrapeRank score live with a short cache
+8. The **backend** serves all directory API endpoints, reading from Postgres and Redis
+9. The indexer publishes **NIP-85 kind 30382** events back to strfry with per-observer trust assertions
 
 ## Prerequisites
 

@@ -79,10 +79,122 @@ def _cache_set(cache, key, data):
         cache[key] = {"data": data, "ts": time.time()}
 
 
+def _lookup_score_to_tier(score: float) -> str:
+    if score >= 0.50:
+        return "highly_trusted"
+    if score >= 0.20:
+        return "trusted"
+    if score >= 0.07:
+        return "neutral"
+    if score >= 0.02:
+        return "low_trust"
+    return "unverified"
+
+
+def _safe_lookup_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return number
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_lookup_int(value):
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_brainstorm_rank(value):
+    rank = _safe_lookup_float(value)
+    if rank is None:
+        return None
+    score = rank / 100.0 if rank > 1.0 else rank
+    return max(0.0, min(score, 1.0))
+
+
+def _brainstorm_lookup_url(pubkey: str) -> str:
+    import urllib.parse
+    encoded = urllib.parse.quote(pubkey, safe="")
+    if "{pubkey}" in BRAINSTORM_LOOKUP_SCORE_API_URL:
+        return BRAINSTORM_LOOKUP_SCORE_API_URL.format(pubkey=encoded)
+    return BRAINSTORM_LOOKUP_SCORE_API_URL.rstrip("/") + "/" + encoded
+
+
+async def _fetch_brainstorm_public_score(pubkey: str):
+    if not BRAINSTORM_LOOKUP_SCORE_ENABLED or not BRAINSTORM_LOOKUP_SCORE_API_URL:
+        return None
+
+    cache_key = f"brainstorm:{pubkey}"
+    cached = _cache_get(_brainstorm_lookup_cache, cache_key, 300)
+    if cached is not None:
+        return cached
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=BRAINSTORM_LOOKUP_SCORE_TIMEOUT,
+            follow_redirects=True,
+            headers={"Accept": "application/json"},
+        ) as client:
+            resp = await client.get(_brainstorm_lookup_url(pubkey))
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception as e:
+        logger.debug("Brainstorm public score fetch failed for %s: %s", pubkey[:16], e)
+        return None
+
+    doc = payload.get("document") if isinstance(payload, dict) else None
+    if not doc and isinstance(payload, dict) and isinstance(payload.get("hits"), list) and payload["hits"]:
+        doc = payload["hits"][0]
+    if not isinstance(doc, dict):
+        return None
+
+    doc_pubkey = str(doc.get("pubkey") or doc.get("id") or "").strip().lower()
+    if doc_pubkey and doc_pubkey != pubkey:
+        return None
+
+    rank = _safe_lookup_float(doc.get("wot_rank"))
+    score = _normalize_brainstorm_rank(rank)
+    if score is None:
+        return None
+
+    result = {
+        "score": round(score, 4),
+        "rank": rank,
+        "tier": _lookup_score_to_tier(score),
+        "hops": _safe_lookup_int(doc.get("wot_hops")),
+        "followers": _safe_lookup_int(doc.get("wot_followers")) or 0,
+        "pov": str(doc.get("wot_pov") or "").strip().lower() or None,
+        "source": "brainstorm",
+        "fetched_at": int(time.time()),
+    }
+    _cache_set(_brainstorm_lookup_cache, cache_key, result)
+    return result
+
+
 _card_cache = {}
 CARD_CACHE_TTL = 300  # 5 minutes
 _wrapped_cache = {}
 WRAPPED_CACHE_TTL = 300  # 5 minutes
+_brainstorm_lookup_cache = {}
+
+BRAINSTORM_LOOKUP_SCORE_API_URL = (
+    os.environ.get("BRAINSTORM_LOOKUP_SCORE_API_URL")
+    or os.environ.get("BRAINSTORM_HOUSE_SCORE_API_URL")
+    or "https://brainstorm.world/api/search/profiles/meili/document/{pubkey}"
+).strip()
+BRAINSTORM_LOOKUP_SCORE_TIMEOUT = float(os.environ.get("BRAINSTORM_LOOKUP_SCORE_TIMEOUT", "4"))
+BRAINSTORM_LOOKUP_SCORE_ENABLED = (
+    os.environ.get("BRAINSTORM_LOOKUP_SCORE_ENABLED", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
 
 app = FastAPI(title=f"{RELAY_DOMAIN} Directory API", docs_url=None, redoc_url=None)
 
@@ -2269,7 +2381,7 @@ async def trust_lookup(
     result["observer"] = (observer_hex[:16] + "...") if observer_hex else None
     result["target"] = target_hex
 
-    # Run profile fetch, nostrarchives, NIP-45, trust path, and trust history ALL in parallel
+    # Run profile, public GrapeRank, nostrarchives, NIP-45, path, and history in parallel.
     need_profile = not result.get("profile")
 
     async def _get_profile():
@@ -2362,8 +2474,9 @@ async def trust_lookup(
         logger.info(f"trust-lookup timing: {name} = {_timer.time()-t:.2f}s")
         return r
 
-    profile_result, archive_stats, global_stats, trust_path_result, trust_history_result, first_seen_ts = await asyncio.gather(
+    profile_result, public_graperank, archive_stats, global_stats, trust_path_result, trust_history_result, first_seen_ts = await asyncio.gather(
         _timed("profile", _get_profile()),
+        _timed("brainstorm", _fetch_brainstorm_public_score(target_hex)),
         _timed("archives", _fetch_nostrarchives_stats(target_hex)),
         _timed("nip45+primal", _fetch_social_stats_nip45(target_hex)),
         _timed("trust_path", _get_trust_path()),
@@ -2375,8 +2488,25 @@ async def trust_lookup(
 
     if isinstance(profile_result, Exception):
         profile_result = None
+    if isinstance(public_graperank, Exception):
+        public_graperank = None
     if need_profile and profile_result:
         result["profile"] = profile_result
+
+    if public_graperank:
+        result["public_graperank"] = public_graperank
+        result["public_graperank_score"] = public_graperank["score"]
+        if not observer_hex:
+            result["trust_score"] = public_graperank["score"]
+            result["trust_tier"] = public_graperank["tier"]
+            result["trust_hops"] = public_graperank.get("hops")
+            result["trust_score_source"] = "public_graperank"
+        elif result.get("trust_tier") in (None, "unknown") and not result.get("trust_score"):
+            result["trust_score_source"] = "personalized_pending"
+        else:
+            result["trust_score_source"] = "personalized"
+    elif not result.get("trust_score_source"):
+        result["trust_score_source"] = "personalized" if observer_hex else "none"
 
     # First seen: combine binary search result with Primal's time_joined
     first_seen_candidates = []

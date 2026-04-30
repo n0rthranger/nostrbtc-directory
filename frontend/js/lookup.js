@@ -547,6 +547,7 @@
         var hasTrust = data.trust_score !== null && data.trust_tier !== null && data.trust_tier !== 'unknown';
         var tier = hasTrust ? tierInfo(data.trust_tier) : null;
         var glowColor = (hasTrust && tier) ? tier.color : '#222';
+        var trustSource = data.trust_score_source || '';
 
         // Avatar
         var avatarHtml;
@@ -573,16 +574,21 @@
             var hopsLabel = data.trust_hops != null ? data.trust_hops + ' hop' + (data.trust_hops !== 1 ? 's' : '') : '';
             var confidenceLabel = pct >= 70 ? 'High' : pct >= 40 ? 'Moderate' : pct >= 15 ? 'Low' : 'Minimal';
             var displayName = esc(name !== 'Unknown' ? name : truncNpub(npub));
+            var isPublicGrapeRank = trustSource === 'public_graperank';
+            var ringLabel = isPublicGrapeRank ? 'PUBLIC GRAPERANK' : 'TRUST SCORE';
+            var confidenceDesc = isPublicGrapeRank
+                ? pct + '% public GrapeRank score from Brainstorm\'s public point of view.'
+                : pct + '% confidence that <strong>' + displayName + '</strong> is a genuine participant, based on your trusted community\u2019s follows, mutes, and reports.';
             trustRingHtml =
                 '<div class="lu-trust-locked">' +
                     '<div class="lu-locked-ring" style="--tier-color:' + tier.color + ';border-color:' + tier.color + '30;box-shadow:0 0 15px ' + tier.color + '25,0 0 30px ' + tier.color + '10,inset 0 0 20px rgba(0,0,0,0.5)">' +
                         '<div class="lu-locked-glitch" data-text="' + pct + '" style="color:' + tier.color + ';text-shadow:0 0 10px ' + tier.color + ',2px 0 rgba(247,147,26,0.3),-2px 0 rgba(6,182,212,0.3)">' + pct + '</div>' +
                         '<div class="lu-locked-scanline"></div>' +
                     '</div>' +
-                    '<div class="lu-locked-label" style="color:' + tier.color + ';text-shadow:0 0 8px ' + tier.color + '66">TRUST SCORE</div>' +
+                    '<div class="lu-locked-label" style="color:' + tier.color + ';text-shadow:0 0 8px ' + tier.color + '66">' + ringLabel + '</div>' +
                     '<div class="lu-confidence">' +
                         '<span class="lu-confidence-level" style="color:' + tier.color + '">' + confidenceLabel + ' confidence</span>' +
-                        '<span class="lu-confidence-desc">' + pct + '% confidence that <strong>' + displayName + '</strong> is a genuine participant, based on your trusted community\u2019s follows, mutes, and reports.</span>' +
+                        '<span class="lu-confidence-desc">' + confidenceDesc + '</span>' +
                     '</div>' +
                     '<div class="lu-ring-meta">' +
                         (hopsLabel ? '<span class="lu-ring-hops">' + hopsLabel + '</span>' : '') +
@@ -761,10 +767,22 @@
                 '</div>';
         }
 
+        var publicGrapeHtml = '';
+        if (data.public_graperank && data.public_graperank.score != null && trustSource !== 'public_graperank') {
+            var publicScore = Number(data.public_graperank.score || 0);
+            var publicColor = publicScore >= 0.5 ? '#F7931A' : publicScore >= 0.2 ? '#c084fc' : publicScore >= 0.07 ? '#a78bfa' : '#7c3aed';
+            publicGrapeHtml =
+                '<div class="lu-act-item">' +
+                    '<span class="lu-act-num" style="color:' + publicColor + '">' + Math.round(publicScore * 100) + '</span>' +
+                    '<span class="lu-act-label">public GrapeRank</span>' +
+                '</div>';
+        }
+
         var activityZoneHtml =
             '<div class="lu-zone lu-zone-activity">' +
                 '<div class="lu-activity-grid">' +
                     influenceHtml +
+                    publicGrapeHtml +
                     '<div class="lu-act-item">' +
                         '<span class="lu-act-num lu-act-cyan">' + fmtK(notes) + '</span>' +
                         '<span class="lu-act-label">notes</span>' +
