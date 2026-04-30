@@ -2502,7 +2502,11 @@ async def trust_lookup(
             result["trust_hops"] = public_graperank.get("hops")
             result["trust_score_source"] = "public_graperank"
         elif result.get("trust_tier") in (None, "unknown") and not result.get("trust_score"):
-            result["trust_score_source"] = "personalized_pending"
+            result["personalized_trust_pending"] = True
+            result["trust_score"] = public_graperank["score"]
+            result["trust_tier"] = public_graperank["tier"]
+            result["trust_hops"] = public_graperank.get("hops")
+            result["trust_score_source"] = "public_graperank"
         else:
             result["trust_score_source"] = "personalized"
     elif not result.get("trust_score_source"):
