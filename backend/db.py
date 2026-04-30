@@ -205,9 +205,12 @@ def _ensure_local_tables(pg):
                     target_pubkey TEXT NOT NULL,
                     edge_type TEXT NOT NULL DEFAULT 'follow',
                     weight REAL DEFAULT 1.0,
+                    last_seen_at TIMESTAMPTZ DEFAULT NOW(),
                     PRIMARY KEY (source_pubkey, target_pubkey, edge_type)
                 );
+                ALTER TABLE trust_edges ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();
                 CREATE INDEX IF NOT EXISTS idx_trust_edges_target ON trust_edges(target_pubkey, edge_type);
+                CREATE INDEX IF NOT EXISTS idx_trust_edges_updated ON trust_edges(last_seen_at);
 
                 -- Personalized scores (GrapeRank output)
                 CREATE TABLE IF NOT EXISTS personalized_scores (
@@ -254,6 +257,23 @@ def _ensure_local_tables(pg):
                     tier TEXT NOT NULL DEFAULT 'unverified',
                     computed_at TIMESTAMPTZ DEFAULT NOW()
                 );
+                CREATE TABLE IF NOT EXISTS house_graperank_scores (
+                    target_pubkey TEXT PRIMARY KEY,
+                    score REAL NOT NULL DEFAULT 0,
+                    tier TEXT NOT NULL DEFAULT 'unverified',
+                    hops INTEGER,
+                    average_score REAL,
+                    confidence REAL,
+                    total_input REAL,
+                    verified BOOLEAN DEFAULT FALSE,
+                    verified_followers INTEGER DEFAULT 0,
+                    source_observer TEXT NOT NULL,
+                    computed_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_house_graperank_score
+                    ON house_graperank_scores(score DESC);
+                CREATE INDEX IF NOT EXISTS idx_house_graperank_source
+                    ON house_graperank_scores(source_observer);
                 CREATE TABLE IF NOT EXISTS trust_cluster_meta (
                     cluster_id INTEGER PRIMARY KEY,
                     label TEXT NOT NULL DEFAULT '',
@@ -933,7 +953,7 @@ def get_directory_page(page=1, limit=24, sort="newest", badge_filter=None, searc
         return [], 0
 
 
-def get_directory_page_personalized(observer_pubkey, page=1, limit=24, sort="newest",
+def get_directory_page_personalized(observer_pubkey, page=1, limit=24, sort="trust",
                                      badge_filter=None, search=None, tag_filter=None, max_hops=5, cluster_filter=None):
     """Personalized directory query: joins personalized_scores for observer's trust view.
 
@@ -953,9 +973,10 @@ def get_directory_page_personalized(observer_pubkey, page=1, limit=24, sort="new
             "newest": psql.SQL("dp.subscription_created DESC"),
             "active": psql.SQL("dp.last_active DESC"),
             "name": psql.SQL("dp.name ASC"),
-            "trust": psql.SQL("COALESCE(ps.score, 0) DESC, dp.last_active DESC"),
+            "trust": psql.SQL("COALESCE(ps.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"),
+            "top": psql.SQL("COALESCE(ps.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"),
         }
-        order = sort_map.get(sort, psql.SQL("dp.subscription_created DESC"))
+        order = sort_map.get(sort, psql.SQL("COALESCE(ps.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"))
         extra_where = psql.SQL(" AND " + " AND ".join(where_clauses)) if where_clauses else psql.SQL("")
 
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -1993,11 +2014,35 @@ def get_global_consensus_scores():
         return {}
 
 
-def get_directory_page_global(page=1, limit=24, sort="newest", badge_filter=None,
-                               search=None, tag_filter=None, cluster_filter=None):
-    """Directory listing with global consensus trust scores.
+def get_public_graperank_scores():
+    """Get public GrapeRank scores, preferring house scores with global fallback."""
+    pg = _get_pg()
+    if not pg:
+        return get_global_consensus_scores()
+    try:
+        with pg.cursor() as cur:
+            cur.execute("""
+                SELECT COALESCE(hgs.target_pubkey, gs.target_pubkey) AS target_pubkey,
+                       COALESCE(hgs.score, gs.score) AS score
+                FROM house_graperank_scores hgs
+                FULL OUTER JOIN global_consensus_scores gs
+                  ON hgs.target_pubkey = gs.target_pubkey
+            """)
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception:
+        try:
+            pg.rollback()
+        except Exception:
+            pass
+        return get_global_consensus_scores()
 
-    Like get_directory_page but LEFT JOINs global_consensus_scores for trust sorting.
+
+def get_directory_page_global(page=1, limit=24, sort="trust", badge_filter=None,
+                               search=None, tag_filter=None, cluster_filter=None):
+    """Directory listing with public house scores and global-consensus fallback.
+
+    The house score is a fixed public point of view. Global consensus remains
+    the fallback while the house refresh is warming up or missing a member.
     """
     pg = _get_pg()
     if not pg:
@@ -2012,15 +2057,17 @@ def get_directory_page_global(page=1, limit=24, sort="newest", badge_filter=None
             "newest": psql.SQL("dp.subscription_created DESC"),
             "active": psql.SQL("dp.last_active DESC"),
             "name": psql.SQL("dp.name ASC"),
-            "trust": psql.SQL("COALESCE(gs.score, 0) DESC, dp.last_active DESC"),
+            "trust": psql.SQL("COALESCE(hgs.score, gs.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"),
+            "top": psql.SQL("COALESCE(hgs.score, gs.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"),
         }
-        order = sort_map.get(sort, psql.SQL("dp.subscription_created DESC"))
+        order = sort_map.get(sort, psql.SQL("COALESCE(hgs.score, gs.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"))
         extra_where = psql.SQL(" AND " + " AND ".join(where_clauses)) if where_clauses else psql.SQL("")
 
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 psql.SQL(
                     "SELECT COUNT(*) as c FROM directory_profiles dp "
+                    "LEFT JOIN house_graperank_scores hgs ON dp.hex_pubkey = hgs.target_pubkey "
                     "LEFT JOIN global_consensus_scores gs ON dp.hex_pubkey = gs.target_pubkey "
                     "LEFT JOIN trust_clusters tc ON dp.hex_pubkey = tc.pubkey "
                     "WHERE 1=1{}"
@@ -2035,9 +2082,15 @@ def get_directory_page_global(page=1, limit=24, sort="newest", badge_filter=None
                     "SELECT dp.hex_pubkey AS pubkey, dp.npub, dp.name, dp.picture, dp.nip05_display, dp.about, dp.lud16, "
                     "dp.badges::text AS badges, dp.event_count, dp.last_active, dp.trust_count, "
                     "dp.directory_tags, dp.card_url, dp.reputation_score, dp.self_signed, "
-                    "gs.score AS trust_score, gs.tier AS trust_tier, "
+                    "COALESCE(hgs.score, gs.score) AS trust_score, "
+                    "COALESCE(hgs.tier, gs.tier) AS trust_tier, "
+                    "hgs.hops AS trust_hops, "
+                    "CASE WHEN hgs.target_pubkey IS NOT NULL THEN 'house_graperank' "
+                    "     WHEN gs.target_pubkey IS NOT NULL THEN 'global_consensus' "
+                    "     ELSE 'none' END AS trust_score_source, "
                     "tc.cluster_id "
                     "FROM directory_profiles dp "
+                    "LEFT JOIN house_graperank_scores hgs ON dp.hex_pubkey = hgs.target_pubkey "
                     "LEFT JOIN global_consensus_scores gs ON dp.hex_pubkey = gs.target_pubkey "
                     "LEFT JOIN trust_clusters tc ON dp.hex_pubkey = tc.pubkey "
                     "WHERE 1=1{} "
@@ -2094,7 +2147,7 @@ def approximate_visitor_scores(visitor_follows, member_followers_map, precompute
     return scores
 
 
-def get_directory_page_visitor(visitor_scores, page=1, limit=24, sort="newest",
+def get_directory_page_visitor(visitor_scores, page=1, limit=24, sort="trust",
                                 badge_filter=None, search=None, tag_filter=None, cluster_filter=None):
     """Directory listing with approximate visitor scores.
 
@@ -2134,9 +2187,10 @@ def get_directory_page_visitor(visitor_scores, page=1, limit=24, sort="newest",
             "newest": psql.SQL("dp.subscription_created DESC"),
             "active": psql.SQL("dp.last_active DESC"),
             "name": psql.SQL("dp.name ASC"),
-            "trust": psql.SQL("COALESCE(vs.score, 0) DESC, dp.last_active DESC"),
+            "trust": psql.SQL("COALESCE(vs.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"),
+            "top": psql.SQL("COALESCE(vs.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"),
         }
-        order = sort_map.get(sort, psql.SQL("dp.subscription_created DESC"))
+        order = sort_map.get(sort, psql.SQL("COALESCE(vs.score, 0) DESC, COALESCE(dp.reputation_score, 0) DESC, dp.last_active DESC"))
         extra_where = psql.SQL(" AND " + " AND ".join(where_clauses)) if where_clauses else psql.SQL("")
 
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

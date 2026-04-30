@@ -17,19 +17,19 @@ import java.util.Set;
 
 public class GrapeRankAlgorithm {
 
-    private static final int MAX_HOPS = 8;
-    private static final int MAX_ITERATIONS;
+    private static final int DISPLAY_MAX_HOPS = envInt("GRAPERANK_DISPLAY_MAX_HOPS", 8);
+    private static final int RELEVANT_MAX_HOPS = envInt("GRAPERANK_RELEVANT_MAX_HOPS", 992);
+    private static final int MAX_ITERATIONS = envInt("GRAPERANK_MAX_ITERATIONS", 100);
 
-    static {
-        String val = System.getenv().getOrDefault("GRAPERANK_MAX_ITERATIONS", "100");
-        int parsed;
+    private static int envInt(String name, int defaultValue) {
+        String val = System.getenv(name);
+        if (val == null || val.isEmpty()) return defaultValue;
         try {
-            parsed = Integer.parseInt(val);
+            return Integer.parseInt(val);
         } catch (NumberFormatException e) {
-            System.err.println("WARNING: Invalid GRAPERANK_MAX_ITERATIONS='" + val + "', using default 100");
-            parsed = 100;
+            System.err.println("WARNING: Invalid " + name + "='" + val + "', using default " + defaultValue);
+            return defaultValue;
         }
-        MAX_ITERATIONS = parsed;
     }
 
     public static GrapeRankAlgorithmResult graperankAlgorithm(
@@ -219,25 +219,27 @@ public class GrapeRankAlgorithm {
     public GrapeRankResult computeForObserver(CachedGraph graph, String observer) {
         long startTime = System.currentTimeMillis();
 
-        // BFS to find reachable users + hop distances (in-memory, no Neo4j)
-        Map<String, Integer> hopDistances = bfs(graph.followAdjacency, observer, MAX_HOPS);
-
-        // All reachable users = everything BFS found
-        // If observer is isolated (not in graph), return empty
-        if (hopDistances.size() <= 1 && !graph.allUserSet.contains(observer)) {
+        Map<String, Integer> relevantHopDistances = bfs(graph.followAdjacency, observer, RELEVANT_MAX_HOPS);
+        if (relevantHopDistances.size() <= 1) {
             return new GrapeRankResult(new HashMap<>(), 0, 0, false);
         }
 
-        // Use all users in the graph as relevant (same connected component)
-        List<String> relevantUsers = graph.allUsers;
-        Set<String> relevantUserSet = graph.allUserSet;
+        Set<String> relevantUserSet = new HashSet<>(relevantHopDistances.keySet());
+        List<String> relevantUsers = new ArrayList<>(relevantUserSet);
+
+        Map<String, Integer> displayHopDistances = new HashMap<>();
+        for (Map.Entry<String, Integer> entry : relevantHopDistances.entrySet()) {
+            if (entry.getValue() <= DISPLAY_MAX_HOPS) {
+                displayHopDistances.put(entry.getKey(), entry.getValue());
+            }
+        }
 
         // Build observer-specific GrapeRankInputs from pre-indexed relationships
         Map<String, List<GrapeRankInput>> graperankInputs =
                 buildInputsForObserver(graph, observer, relevantUserSet);
 
         // Init scorecards
-        Map<String, ScoreCard> scorecards = initGrapeRankScorecards(relevantUsers, observer, hopDistances);
+        Map<String, ScoreCard> scorecards = initGrapeRankScorecards(relevantUsers, observer, displayHopDistances);
 
         // Run algorithm
         long algoStart = System.currentTimeMillis();

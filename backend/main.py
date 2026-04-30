@@ -1681,7 +1681,7 @@ async def directory_recommendations(npub: str, request: Request):
     else:
         # Tier 2: approximate scores from precomputed member data (1 batch query)
         precomputed = db.get_personalized_scores_batch(member_pks)
-        global_scores = db.get_global_consensus_scores()
+        global_scores = db.get_public_graperank_scores()
         personalized = db.approximate_visitor_scores(
             user_follows, dict(followers_of), precomputed, global_scores
         )
@@ -1784,7 +1784,7 @@ async def directory_list(
     request: Request,
     page: int = 1,
     limit: int = 24,
-    sort: str = "newest",
+    sort: str = "trust",
     badge: str = "",
     search: str = "",
     tag: str = "",
@@ -1797,9 +1797,9 @@ async def directory_list(
 
     page = max(1, min(page, 1000))
     limit = max(1, min(limit, 100))
-    valid_sorts = ("newest", "active", "name", "trust")
+    valid_sorts = ("newest", "active", "name", "trust", "top")
     if sort not in valid_sorts:
-        sort = "newest"
+        sort = "trust"
     badge_filter = badge if badge in VALID_BADGES else None
     search_term = search.strip()[:100] if search else None
     tag_filter = tag.strip().lower()[:30] if tag else None
@@ -1916,7 +1916,7 @@ async def directory_list(
                     member_pks = {m["pubkey"] for m in members_list}
                     precomputed = await loop.run_in_executor(None, db.get_personalized_scores_batch, member_pks)
 
-                    global_scores = await loop.run_in_executor(None, db.get_global_consensus_scores)
+                    global_scores = await loop.run_in_executor(None, db.get_public_graperank_scores)
 
                     visitor_scores = db.approximate_visitor_scores(
                         user_follows, followers_of, precomputed, global_scores
@@ -2168,7 +2168,7 @@ async def compute_trust(request: Request):
 
         follows = await _fetch_user_follow_list(hex_pubkey)
         if not follows:
-            return JSONResponse({"status": "ready", "tier": 3, "message": "No follow list — using global consensus"})
+            return JSONResponse({"status": "ready", "tier": 3, "message": "No follow list — using public GrapeRank"})
 
         loop = asyncio.get_event_loop()
         edges = await loop.run_in_executor(None, db.get_trust_edges_for_sources, follows)
@@ -2182,7 +2182,7 @@ async def compute_trust(request: Request):
         member_pks = {m["pubkey"] for m in members_list}
         precomputed = await loop.run_in_executor(None, db.get_personalized_scores_batch, member_pks)
 
-        global_scores = await loop.run_in_executor(None, db.get_global_consensus_scores)
+        global_scores = await loop.run_in_executor(None, db.get_public_graperank_scores)
         visitor_scores = db.approximate_visitor_scores(follows, followers_of, precomputed, global_scores)
 
         if r and visitor_scores:

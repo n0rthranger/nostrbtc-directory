@@ -31,11 +31,13 @@ Trust computation:
 Schedule:
 - Continuous: tail strfry, sync edges to Neo4j as they arrive
 - Every 6 hours: per-observer GrapeRank for all paid members
+- Every 6 hours: public house GrapeRank scores imported for anonymous ranking
 - Sunday 3am: full graph rebuild + recomputation
 - NIP-05 and Lightning reachability re-checked every 24 hours
 """
 
 import asyncio
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -71,9 +73,11 @@ if not NEO4J_PASSWORD:
     NEO4J_PASSWORD = ""
 
 GRAPERANK_INTERVAL = 21600  # 6 hours
+HOUSE_GRAPERANK_INTERVAL = int(os.environ.get("HOUSE_GRAPERANK_REFRESH_INTERVAL", str(GRAPERANK_INTERVAL)))
 NIP05_CHECK_INTERVAL = 86400  # 24 hours
 FULL_RECOMPUTE_DAY = 6  # Sunday (0=Monday in weekday())
 GRAPERANK_TIMEOUT = 300  # 5 min timeout waiting for Java GrapeRank result
+GRAPERANK_VALID_THRESHOLD = float(os.environ.get("GRAPERANK_CUTOFF_VALID_USER", "0.02"))
 def _read_secret(name):
     try:
         with open(f"/run/secrets/{name}") as f:
@@ -109,10 +113,26 @@ if not NIP85_SIGNING_KEY:
 
 NIP85_SCORE_THRESHOLD = int(os.environ.get("NIP85_SCORE_THRESHOLD", "1"))  # Only republish when score changes by more than this
 
+HOUSE_OBSERVER_ENV_KEYS = (
+    "NOSTRBTC_HOUSE_POV_PUBKEY",
+    "HOUSE_GRAPERANK_OBSERVER",
+    "BRAINSTORM_HOUSE_POV_PUBKEY",
+)
+BRAINSTORM_HOUSE_SCORE_API_URL = (
+    os.environ.get("BRAINSTORM_HOUSE_SCORE_API_URL")
+    or "https://brainstorm.world/api/search/profiles/meili/document/{pubkey}"
+).strip()
+BRAINSTORM_HOUSE_SCORE_TIMEOUT = float(os.environ.get("BRAINSTORM_HOUSE_SCORE_TIMEOUT", "4"))
+BRAINSTORM_HOUSE_SCORE_CONCURRENCY = max(1, int(os.environ.get("BRAINSTORM_HOUSE_SCORE_CONCURRENCY", "8")))
+BRAINSTORM_HOUSE_SCORE_ENABLED = (
+    os.environ.get("BRAINSTORM_HOUSE_SCORE_ENABLED", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+
 
 # --- Trust tiers ---
 
-def score_to_tier(score, verified_threshold=0.02):
+def score_to_tier(score, verified_threshold=GRAPERANK_VALID_THRESHOLD):
     if score >= 0.50:
         return "highly_trusted"
     elif score >= 0.20:
@@ -123,6 +143,115 @@ def score_to_tier(score, verified_threshold=0.02):
         return "low_trust"
     else:
         return "unverified"
+
+
+def configured_house_observer_pubkey() -> str:
+    for key in HOUSE_OBSERVER_ENV_KEYS:
+        value = os.environ.get(key, "").strip().lower()
+        if not value:
+            continue
+        if len(value) == 64 and all(c in "0123456789abcdef" for c in value):
+            return value
+        logger.warning("%s is not a 64-char hex pubkey; house GrapeRank disabled", key)
+        return ""
+    return ""
+
+
+def _safe_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return number
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value):
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_brainstorm_rank(value):
+    rank = _safe_float(value)
+    if rank is None:
+        return None
+    score = rank / 100.0 if rank > 1.0 else rank
+    return max(0.0, min(score, 1.0))
+
+
+def _score_from_brainstorm_document(doc: dict, observer_pubkey: str):
+    if not isinstance(doc, dict):
+        return None
+    score = _normalize_brainstorm_rank(doc.get("wot_rank"))
+    if score is None:
+        return None
+    document_pov = str(doc.get("wot_pov") or "").strip().lower()
+    if document_pov and observer_pubkey and document_pov != observer_pubkey:
+        logger.debug(
+            "Brainstorm house score POV mismatch for %s: document=%s configured=%s",
+            str(doc.get("pubkey") or doc.get("id") or "")[:16],
+            document_pov[:16],
+            observer_pubkey[:16],
+        )
+    return {
+        "score": score,
+        "tier": score_to_tier(score),
+        "hops": _safe_int(doc.get("wot_hops")),
+        "average_score": None,
+        "confidence": score,
+        "total_input": None,
+        "verified": score >= GRAPERANK_VALID_THRESHOLD,
+        "verified_followers": _safe_int(doc.get("wot_followers")) or 0,
+    }
+
+
+def _brainstorm_house_score_url(pubkey: str) -> str:
+    import urllib.parse
+    encoded = urllib.parse.quote(pubkey, safe="")
+    if "{pubkey}" in BRAINSTORM_HOUSE_SCORE_API_URL:
+        return BRAINSTORM_HOUSE_SCORE_API_URL.format(pubkey=encoded)
+    return BRAINSTORM_HOUSE_SCORE_API_URL.rstrip("/") + "/" + encoded
+
+
+def _fetch_brainstorm_house_score(pubkey: str, observer_pubkey: str):
+    if not BRAINSTORM_HOUSE_SCORE_ENABLED or not BRAINSTORM_HOUSE_SCORE_API_URL:
+        return pubkey, None
+    try:
+        with httpx.Client(timeout=BRAINSTORM_HOUSE_SCORE_TIMEOUT, follow_redirects=True) as client:
+            response = client.get(_brainstorm_house_score_url(pubkey), headers={"Accept": "application/json"})
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as e:
+        logger.debug("Brainstorm house score fetch failed for %s: %s", pubkey[:16], e)
+        return pubkey, None
+    doc = payload.get("document") if isinstance(payload, dict) else None
+    if not doc and isinstance(payload, dict) and isinstance(payload.get("hits"), list) and payload["hits"]:
+        doc = payload["hits"][0]
+    return pubkey, _score_from_brainstorm_document(doc, observer_pubkey)
+
+
+def _fetch_brainstorm_house_scores(member_pubkeys: set, observer_pubkey: str) -> dict:
+    if not BRAINSTORM_HOUSE_SCORE_ENABLED or not member_pubkeys:
+        return {}
+    scores = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=BRAINSTORM_HOUSE_SCORE_CONCURRENCY) as executor:
+        futures = [
+            executor.submit(_fetch_brainstorm_house_score, pubkey, observer_pubkey)
+            for pubkey in sorted(member_pubkeys)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            pubkey, score = future.result()
+            if score is not None:
+                scores[pubkey] = score
+    logger.info("Brainstorm house import: loaded %d/%d public wot_rank scores", len(scores), len(member_pubkeys))
+    return scores
 
 
 # --- Nostr Signing (minimal, for NIP-85 event publishing) ---
@@ -549,9 +678,11 @@ def process_kind3(event: dict):
             values = [(pubkey, target, "follow", 1.0) for target in followed]
             psycopg2.extras.execute_values(
                 cur,
-                "INSERT INTO trust_edges (source_pubkey, target_pubkey, edge_type, weight) VALUES %s "
-                "ON CONFLICT (source_pubkey, target_pubkey, edge_type) DO UPDATE SET weight = EXCLUDED.weight",
-                values
+                "INSERT INTO trust_edges (source_pubkey, target_pubkey, edge_type, weight, last_seen_at) VALUES %s "
+                "ON CONFLICT (source_pubkey, target_pubkey, edge_type) DO UPDATE SET "
+                "weight = EXCLUDED.weight, last_seen_at = EXCLUDED.last_seen_at",
+                values,
+                template="(%s, %s, %s, %s, NOW())"
             )
         pg.commit()
         mark_dirty(pubkey)
@@ -613,7 +744,8 @@ def process_interaction(event: dict):
                 INSERT INTO trust_edges (source_pubkey, target_pubkey, edge_type, weight)
                 VALUES (%s, %s, %s, %s)
                 ON CONFLICT (source_pubkey, target_pubkey, edge_type) DO UPDATE SET
-                    weight = LEAST(trust_edges.weight + EXCLUDED.weight, 100.0)
+                    weight = LEAST(trust_edges.weight + EXCLUDED.weight, 100.0),
+                    last_seen_at = NOW()
             """, (pubkey, target, edge_type, 0.1))
         pg.commit()
         mark_dirty(pubkey)
@@ -682,7 +814,8 @@ def process_zap(event: dict):
                 INSERT INTO trust_edges (source_pubkey, target_pubkey, edge_type, weight)
                 VALUES (%s, %s, 'zap', %s)
                 ON CONFLICT (source_pubkey, target_pubkey, edge_type) DO UPDATE SET
-                    weight = LEAST(trust_edges.weight + EXCLUDED.weight, 100.0)
+                    weight = LEAST(trust_edges.weight + EXCLUDED.weight, 100.0),
+                    last_seen_at = NOW()
             """, (sender, receiver, max(1, amount_msats // 1000)))
         pg.commit()
         mark_dirty(sender)
@@ -1392,12 +1525,105 @@ def _compute_global_consensus():
     return len(consensus)
 
 
+def store_house_graperank_scores(observer: str, scores: dict, member_pubkeys: set | None = None) -> int:
+    """Store public house GrapeRank scores for anonymous directory ranking."""
+    if not observer or not scores:
+        return 0
+
+    pg = get_pg()
+    if not pg:
+        return 0
+
+    try:
+        with pg.cursor() as cur:
+            cur.execute("DELETE FROM house_graperank_scores WHERE source_observer <> %s", (observer,))
+            if member_pubkeys:
+                cur.execute(
+                    "DELETE FROM house_graperank_scores WHERE NOT (target_pubkey = ANY(%s))",
+                    (list(member_pubkeys),),
+                )
+
+            values = [
+                (
+                    pk,
+                    float(data["score"]),
+                    data.get("tier") or score_to_tier(float(data["score"])),
+                    data.get("hops"),
+                    data.get("average_score"),
+                    data.get("confidence"),
+                    data.get("total_input"),
+                    bool(data.get("verified")),
+                    int(data.get("verified_followers") or 0),
+                    observer,
+                )
+                for pk, data in scores.items()
+            ]
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO house_graperank_scores (
+                    target_pubkey, score, tier, hops, average_score, confidence,
+                    total_input, verified, verified_followers, source_observer, computed_at
+                ) VALUES %s
+                ON CONFLICT (target_pubkey) DO UPDATE SET
+                    score = EXCLUDED.score,
+                    tier = EXCLUDED.tier,
+                    hops = EXCLUDED.hops,
+                    average_score = EXCLUDED.average_score,
+                    confidence = EXCLUDED.confidence,
+                    total_input = EXCLUDED.total_input,
+                    verified = EXCLUDED.verified,
+                    verified_followers = EXCLUDED.verified_followers,
+                    source_observer = EXCLUDED.source_observer,
+                    computed_at = NOW()
+                """,
+                values,
+                template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+            )
+        pg.commit()
+        logger.info("House GrapeRank: stored %d public scores", len(values))
+        return len(values)
+    except Exception as e:
+        logger.error(f"House GrapeRank write failed: {e}")
+        try:
+            pg.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        put_pg(pg)
+
+
+def refresh_house_graperank() -> int:
+    """Import public Brainstorm wot_rank scores for current directory members."""
+    if not BRAINSTORM_HOUSE_SCORE_ENABLED:
+        return 0
+
+    observer = configured_house_observer_pubkey()
+    if not observer:
+        logger.info("House GrapeRank: no house observer configured")
+        return 0
+
+    member_pks = get_directory_member_pubkeys()
+    if not member_pks:
+        logger.info("House GrapeRank: no directory members to score")
+        return 0
+
+    scores = _fetch_brainstorm_house_scores(member_pks, observer)
+    if not scores:
+        logger.warning("House GrapeRank: Brainstorm import returned no scores")
+        return 0
+
+    return store_house_graperank_scores(observer, scores, member_pks)
+
+
 async def periodic_graperank():
     """Neo4j graph maintenance + batch GrapeRank + global consensus."""
     await asyncio.sleep(120)  # Initial delay — wait for Neo4j + GrapeRank Java to start
     last_full = 0
     last_graperank = 0
     last_consensus = 0
+    last_house_graperank = 0
 
     # Check if Neo4j graph is empty — if so, do a full rebuild before first computation
     try:
@@ -1429,6 +1655,14 @@ async def periodic_graperank():
     except Exception as e:
         logger.error(f"GrapeRank: initial consensus failed: {e}")
 
+    try:
+        count = await asyncio.to_thread(refresh_house_graperank)
+        if count > 0:
+            last_house_graperank = time.time()
+            logger.info(f"House GrapeRank: initial import complete ({count} scores)")
+    except Exception as e:
+        logger.error(f"House GrapeRank: initial import failed: {e}")
+
     while True:
         try:
             now = datetime.now(timezone.utc)
@@ -1452,6 +1686,11 @@ async def periodic_graperank():
                 count = await asyncio.to_thread(_compute_global_consensus)
                 if count > 0:
                     last_consensus = time.time()
+
+            if time.time() - last_house_graperank > HOUSE_GRAPERANK_INTERVAL - 60:
+                count = await asyncio.to_thread(refresh_house_graperank)
+                if count > 0:
+                    last_house_graperank = time.time()
         except asyncio.CancelledError:
             return
         except Exception as e:
@@ -1547,6 +1786,23 @@ async def main():
                         computed_at TIMESTAMPTZ DEFAULT NOW()
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS house_graperank_scores (
+                        target_pubkey TEXT PRIMARY KEY,
+                        score REAL NOT NULL DEFAULT 0,
+                        tier TEXT NOT NULL DEFAULT 'unverified',
+                        hops INTEGER,
+                        average_score REAL,
+                        confidence REAL,
+                        total_input REAL,
+                        verified BOOLEAN DEFAULT FALSE,
+                        verified_followers INTEGER DEFAULT 0,
+                        source_observer TEXT NOT NULL,
+                        computed_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_house_graperank_score ON house_graperank_scores(score DESC)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_house_graperank_source ON house_graperank_scores(source_observer)")
             pg.commit()
         except Exception as e:
             logger.warning(f"personalized_scores table setup: {e}")

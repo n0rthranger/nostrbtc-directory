@@ -43,11 +43,11 @@ CREATE INDEX IF NOT EXISTS idx_dirprof_last_active ON directory_profiles(last_ac
 CREATE INDEX IF NOT EXISTS idx_dirprof_reputation ON directory_profiles(reputation_score DESC);
 CREATE INDEX IF NOT EXISTS idx_dirprof_subscription_created ON directory_profiles(subscription_created);
 
--- EigenTrust interaction edges
+-- Trust graph edges
 CREATE TABLE IF NOT EXISTS trust_edges (
     source_pubkey   TEXT NOT NULL,
     target_pubkey   TEXT NOT NULL,
-    edge_type       TEXT NOT NULL CHECK (edge_type IN ('follow', 'reply', 'zap', 'reaction', 'repost')),
+    edge_type       TEXT NOT NULL CHECK (edge_type IN ('follow', 'mute', 'report', 'reply', 'zap', 'reaction', 'repost')),
     weight          REAL NOT NULL DEFAULT 1.0,
     last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (source_pubkey, target_pubkey, edge_type)
@@ -99,3 +99,29 @@ CREATE TABLE IF NOT EXISTS personalized_scores (
 
 CREATE INDEX IF NOT EXISTS idx_personalized_observer ON personalized_scores(observer_pubkey);
 CREATE INDEX IF NOT EXISTS idx_personalized_target ON personalized_scores(target_pubkey);
+
+CREATE TABLE IF NOT EXISTS global_consensus_scores (
+    target_pubkey TEXT PRIMARY KEY,
+    score REAL NOT NULL DEFAULT 0,
+    tier TEXT NOT NULL DEFAULT 'unverified',
+    computed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS house_graperank_scores (
+    target_pubkey TEXT PRIMARY KEY,
+    score REAL NOT NULL DEFAULT 0,
+    tier TEXT NOT NULL DEFAULT 'unverified',
+    hops INTEGER,
+    average_score REAL,
+    confidence REAL,
+    total_input REAL,
+    verified BOOLEAN DEFAULT FALSE,
+    verified_followers INTEGER DEFAULT 0,
+    source_observer TEXT NOT NULL,
+    computed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_house_graperank_score
+    ON house_graperank_scores(score DESC);
+CREATE INDEX IF NOT EXISTS idx_house_graperank_source
+    ON house_graperank_scores(source_observer);

@@ -2615,7 +2615,7 @@ a.footer-bar-item:nth-child(2):hover {
 }
 .dir-row {
     display: grid;
-    grid-template-columns: 36px 40px 1fr 60px 40px 70px;
+    grid-template-columns: 36px 40px 1fr 60px 88px 86px;
     align-items: center;
     gap: 0.75rem;
     padding: 0.6rem 1rem;
@@ -2771,6 +2771,7 @@ a.footer-bar-item:nth-child(2):hover {
         padding: 0.5rem 0.6rem;
     }
     .dir-row-status { display: none; }
+    .dir-row-badges { display: none; }
     .dir-avatar-sm, .dir-avatar-fb-sm {
         width: 32px;
         height: 32px;
@@ -2838,6 +2839,9 @@ a.footer-bar-item:nth-child(2):hover {
 
 /* Trust tier badge on row */
 .dir-row-trust {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
     font-family: 'Orbitron', sans-serif;
     font-size: 0.65rem;
     font-weight: 700;

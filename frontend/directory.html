@@ -86,7 +86,8 @@
             <div class="dfilter-row">
                 <div class="dfilter-sort" id="dfilter-sort">
                     <div class="dfilter-sort-slider"></div>
-                    <button type="button" class="dfilter-sort-btn active" data-sort="newest">Newest</button>
+                    <button type="button" class="dfilter-sort-btn active" data-sort="trust">Most Trusted</button>
+                    <button type="button" class="dfilter-sort-btn" data-sort="newest">Newest</button>
                     <button type="button" class="dfilter-sort-btn" data-sort="active">Active</button>
                     <button type="button" class="dfilter-sort-btn" data-sort="name">Name</button>
                 </div>
@@ -136,7 +137,7 @@
     <script>
     window.__dirPrefetch = {
         stats: fetch('/api/directory/stats').then(function(r){return r.json()}).catch(function(){return null}),
-        members: fetch('/api/directory?page=1&limit=50&sort=newest').then(function(r){return r.json()}).catch(function(){return null}),
+        members: fetch('/api/directory?page=1&limit=50&sort=trust').then(function(r){return r.json()}).catch(function(){return null}),
         tags: fetch('/api/directory/tags').then(function(r){return r.json()}).catch(function(){return null}),
         clusters: fetch('/api/directory/clusters').then(function(r){return r.json()}).catch(function(){return null})
     };

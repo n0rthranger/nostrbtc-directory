@@ -14,7 +14,7 @@
     var state = {
         search: '',
         tags: [],
-        sort: 'newest',
+        sort: 'trust',
         badge: '',
         view: 'list'
     };
@@ -38,7 +38,7 @@
     // -----------------------------------------------------------------------
     function readURL() {
         var p = new URLSearchParams(location.search);
-        state.sort = p.get('sort') || 'newest';
+        state.sort = p.get('sort') || 'trust';
         state.badge = p.get('badge') || '';
         state.search = p.get('search') || '';
         var urlTags = p.get('tags');
@@ -53,7 +53,7 @@
 
     function pushURL() {
         var p = new URLSearchParams();
-        if (state.sort !== 'newest') p.set('sort', state.sort);
+        if (state.sort !== 'trust') p.set('sort', state.sort);
         if (state.badge) p.set('badge', state.badge);
         if (state.search) p.set('search', state.search);
         if (state.tags.length > 0) p.set('tags', state.tags.join(','));
@@ -276,7 +276,7 @@
         if (state.badge) {
             chips.push('<span class="dfilter-chip">badge: ' + esc(state.badge.replace(/-/g, ' ')) + '<span class="dfilter-chip-x" data-action="clear-badge">&times;</span></span>');
         }
-        if (state.sort !== 'newest') {
+        if (state.sort !== 'trust') {
             chips.push('<span class="dfilter-chip">sort: ' + esc(state.sort) + '<span class="dfilter-chip-x" data-action="clear-sort">&times;</span></span>');
         }
 
@@ -300,9 +300,9 @@
             updateTagToggleLabel();
         }
         else if (a === 'clear-badge') { state.badge = ''; syncBadgeButtons(); }
-        else if (a === 'clear-sort') { state.sort = 'newest'; syncSortButtons(); }
+        else if (a === 'clear-sort') { state.sort = 'trust'; syncSortButtons(); }
         else if (a === 'reset') {
-            state.search = ''; state.tags = []; state.sort = 'newest'; state.badge = '';
+            state.search = ''; state.tags = []; state.sort = 'trust'; state.badge = '';
             searchInput.value = '';
             syncSortButtons();
             syncBadgeButtons();

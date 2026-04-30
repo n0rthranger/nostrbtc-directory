@@ -50,7 +50,7 @@
     // Get state from terminal
     function getTermState() {
         if (window.__dirTerminal) return window.__dirTerminal.getState();
-        return { search: '', tags: [], sort: 'newest', badge: '', view: 'list' };
+        return { search: '', tags: [], sort: 'trust', badge: '', view: 'list' };
     }
 
     // -----------------------------------------------------------------------
@@ -236,7 +236,23 @@
     // -----------------------------------------------------------------------
     // Trust tier rendering
     // -----------------------------------------------------------------------
-    function trustTierHtml() { return ''; }
+    function trustTierHtml(m, mode) {
+        var tierKey = m.trust_tier || 'unverified';
+        var tier = TIER_DEFS[tierKey] || TIER_DEFS.unverified;
+        var hasScore = m.trust_score !== null && m.trust_score !== undefined;
+        var grapeScore = hasScore ? Math.round(Number(m.trust_score || 0) * 100) : 0;
+        var repScore = Math.round(Number(m.reputation_score || 0));
+        var title = 'GrapeRank ' + grapeScore + ', reputation ' + repScore;
+        if (mode === 'row') {
+            return '<div class="dir-row-trust" title="' + escHtml(title) + '" style="color:' + tier.color + '">' +
+                '<span>GR ' + grapeScore + '</span><span class="dir-trust-score">R ' + repScore + '</span>' +
+            '</div>';
+        }
+        return '<div class="dir-card-trust" title="' + escHtml(title) + '" style="border-color:' + tier.color + '55;color:' + tier.color + '">' +
+            '<span class="dir-trust-dot" style="background:' + tier.color + '"></span>' +
+            '<span>GrapeRank ' + grapeScore + '</span><span class="dir-trust-score">R ' + repScore + '</span>' +
+        '</div>';
+    }
 
     // -----------------------------------------------------------------------
     // Table row rendering (default — scales to thousands)
@@ -346,6 +362,7 @@
             '<div class="dir-row-avatar"></div>' +
             '<div class="dir-row-identity">Member</div>' +
             '<div class="dir-row-badges">Badges</div>' +
+            '<div class="dir-row-trust-header">GrapeRank</div>' +
             '<div class="dir-row-stats">Activity</div>' +
         '</div>';
     }
@@ -413,8 +430,7 @@
             params.set('hops', currentHops);
         }
 
-        // Use prefetched data for the initial newest-sorted load (no observer)
-        var usePrefetch = (!observerNpub && !append && currentPage === 1 && s.sort === 'newest' && !s.badge && !s.search && s.tags.length === 0 && window.__dirPrefetch && window.__dirPrefetch.members);
+        var usePrefetch = (!observerNpub && !append && currentPage === 1 && s.sort === 'trust' && !s.badge && !s.search && s.tags.length === 0 && window.__dirPrefetch && window.__dirPrefetch.members);
         var dataPromise = usePrefetch
             ? window.__dirPrefetch.members.then(function(d) { window.__dirPrefetch.members = null; return d; })
             : fetch(API_BASE + '/api/directory?' + params).then(function(r) {

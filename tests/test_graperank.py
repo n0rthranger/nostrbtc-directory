@@ -6,7 +6,13 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'indexer'))
 
-from graperank import graperank, Rating
+from graperank import (
+    DEFAULT_ATTENUATION,
+    DEFAULT_OBSERVER_CONFIDENCE,
+    DEFAULT_RIGOR,
+    graperank,
+    Rating,
+)
 
 
 def make_follow(rater, ratee, confidence=0.03, observer_confidence=0.5, observer=None):
@@ -200,7 +206,9 @@ def test_observer_direct_follow_high_score():
     observer = "observer"
     ratings = [make_follow("observer", "A", observer="observer")]
     scores = graperank(observer, ["A"], ratings)
-    assert scores["A"] > 0.3, f"Direct follow should give high score, got {scores['A']}"
+    expected = 1 - (DEFAULT_RIGOR ** (DEFAULT_OBSERVER_CONFIDENCE * DEFAULT_ATTENUATION))
+    assert abs(scores["A"] - expected) < 0.001, \
+        f"Direct follow should match current default constants, got {scores['A']} vs {expected}"
 
 
 def test_chain_attenuation():

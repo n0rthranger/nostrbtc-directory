@@ -7,6 +7,7 @@ A personalized Web of Trust directory for Nostr, powered by [GrapeRank](https://
 ## What It Does
 
 - **Personalized trust scoring** — Every directory member gets a per-observer GrapeRank trust score based on the social graph (follows, zaps, replies, reactions, mutes, reports). Two different users see different rankings.
+- **Public GrapeRank ranking** — Anonymous directory views rank members by a configured public GrapeRank point of view, with global consensus as the fallback.
 - **NIP-85 Trusted Assertion publishing** — The relay publishes kind 30382 events containing per-observer trust scores, making Web of Trust data available to any Nostr client.
 - **Member discovery** — Given an npub, recommends directory members the user doesn't yet follow, ranked by trust score.
 - **Follow recommendations** — Suggests who to follow based on the trust graph and community structure.
@@ -72,9 +73,10 @@ A personalized Web of Trust directory for Nostr, powered by [GrapeRank](https://
 2. **Indexer worker** tails strfry's WebSocket, extracts social signals, and syncs the follow graph to **Neo4j**
 3. Every 6 hours, the indexer triggers a **GrapeRank** computation via Redis message queue
 4. **GrapeRank (Java)** reads the social graph from Neo4j, computes per-observer trust scores, and writes results to **Postgres**
-5. The **directory indexer** (inside the backend) pre-computes profile data every 15 minutes: NIP-05 verification, Lightning reachability, badges, and trust statistics
-6. The **backend** serves all directory API endpoints, reading from Postgres and Redis
-7. The indexer publishes **NIP-85 kind 30382** events back to strfry with per-observer trust assertions
+5. The indexer imports public GrapeRank scores for the configured house point of view, then keeps global consensus as a fallback
+6. The **directory indexer** (inside the backend) pre-computes profile data every 15 minutes: NIP-05 verification, Lightning reachability, badges, and trust statistics
+7. The **backend** serves all directory API endpoints, reading from Postgres and Redis
+8. The indexer publishes **NIP-85 kind 30382** events back to strfry with per-observer trust assertions
 
 ## Prerequisites
 
@@ -232,9 +234,11 @@ Clients can query `{"kinds": [30382], "#d": ["<observer-pubkey>"]}` to get perso
 
 GrapeRank computes personalized trust scores using a capped weighted average over the social graph. Key parameters:
 
-- **Attenuation** (0.7) — Trust decays as it propagates through the graph
-- **Rigor** (0.2) — Controls how much evidence is needed before trusting a score
+- **Attenuation** (0.85) — Trust decays as it propagates through the graph
+- **Rigor** (0.5) — Controls how much evidence is needed before trusting a score
 - **Observer confidence** (0.5) — The observer's self-trust seed value
+- **Relevant hop window** (992) — Users considered for scoring from the observer's follow graph
+- **Displayed hop window** (8) — Hop distances shown in scorecards before falling back to `999`
 
 The algorithm is sybil-resistant: a cluster of fake accounts all following each other cannot inflate their scores because the trust must originate from the observer's direct connections.
 
